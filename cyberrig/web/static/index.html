@@ -274,6 +274,20 @@ input[type="range"]::-moz-range-thumb {
   display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
   opacity: 0.85; margin-top: 2px; text-transform: none;
 }
+#atu-row {
+  display: flex; gap: 6px; margin-top: 8px; margin-bottom: 4px;
+}
+#atu-row .tgl {
+  flex: 1; padding: 10px 8px; font-size: 13px; letter-spacing: 1px;
+  text-align: center;
+}
+#atu-tune-btn.tuning {
+  background: var(--orange); color: #000; border-color: #ffcc00;
+  box-shadow: 0 0 14px #ff8800aa; animation: tune-pulse 1.0s ease-in-out infinite;
+}
+#atu-hint {
+  font-size: 10px; color: var(--gdim); margin: 0 0 8px 2px; letter-spacing: 0.3px;
+}
 @keyframes tune-pulse {
   0%, 100% { box-shadow: 0 0 10px #ff880066; }
   50% { box-shadow: 0 0 22px #ffaa00cc; }
@@ -552,6 +566,16 @@ input[type="range"]::-moz-range-thumb {
     <div class="panel-title">Transmit &amp; Split</div>
 
     <button type="button" id="ptt-btn">PTT</button>
+
+    <!-- Internal FTDX10 ATU (CAT AC) — separate from REMOTE TUNE below -->
+    <div id="atu-row">
+      <button type="button" class="tgl" id="atu-btn" onclick="toggleATU()"
+              title="Internal antenna tuner on/off (CAT AC001/AC000)">ATU</button>
+      <button type="button" class="tgl" id="atu-tune-btn" onclick="atuTune()"
+              title="Start or abort internal ATU tune cycle (CAT AC002). Keys the radio briefly.">TUNE</button>
+    </div>
+    <div id="atu-hint">Internal ATU · ATU = on/off · TUNE = match now</div>
+
     <!-- Remote autotuner (MFJ-994BRT) — continuous ~20W AM carrier. NOT internal ATU. -->
     <button id="remote-tune-btn" onclick="toggleRemoteTune()"
             title="Keys ~20W AM carrier for remote autotuner (MFJ). Not the FTDX10 internal ATU.">
@@ -696,7 +720,8 @@ let state = {
   contour:false, contour_freq:1000, apf:false, compressor:false, comp_level:50,
   vox:false, vox_gain:50, vox_delay:100, monitor:false, mon_level:50,
   cw_speed:20, cw_pitch:600, cw_breakin:false, cw_delay:200,
-  antenna:1, locked:false, mic_gain:50, macro_running:false
+  antenna:1, locked:false, mic_gain:50, atu:false, atu_tuning:false,
+  macro_running:false
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -978,6 +1003,17 @@ function updateUI() {
   document.querySelectorAll('#ant-btns .tgl').forEach((b, i) => {
     b.classList.toggle('active', (i + 1) === state.antenna);
   });
+
+  // Internal ATU
+  setTgl('atu-btn', state.atu);
+  const atuTuneBtn = document.getElementById('atu-tune-btn');
+  if (atuTuneBtn) {
+    atuTuneBtn.classList.toggle('tuning', !!state.atu_tuning);
+    atuTuneBtn.classList.toggle('active', !!state.atu_tuning);
+    atuTuneBtn.textContent = state.atu_tuning ? '● TUNING' : 'TUNE';
+  }
+  const atuBtn = document.getElementById('atu-btn');
+  if (atuBtn) atuBtn.textContent = state.atu ? 'ATU ON' : 'ATU';
 
   // Split / RIT / XIT
   setTgl('split-btn', state.split, 'warn');
@@ -1489,6 +1525,42 @@ async function toggleRemoteTune() {
     updateUI();
   }
 }
+
+function toggleATU() {
+  const on = !state.atu;
+  state.atu = on;
+  if (!on) state.atu_tuning = false;
+  updateUI();
+  api('/api/atu', {on});
+}
+
+async function atuTune() {
+  // Optimistic: starting if idle, aborting if already tuning
+  state.atu_tuning = !state.atu_tuning;
+  if (state.atu_tuning) state.atu = true;
+  updateUI();
+  try {
+    const r = await fetch('/api/atu/tune', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: '{}'
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      state.atu_tuning = false;
+      updateUI();
+      alert(j.error || 'Internal ATU TUNE failed');
+      return;
+    }
+    if (j.atu != null) state.atu = j.atu;
+    if (j.atu_tuning != null) state.atu_tuning = j.atu_tuning;
+    updateUI();
+  } catch (e) {
+    state.atu_tuning = false;
+    updateUI();
+  }
+}
+
 function toggleNB()   { api('/api/nb', {on: !state.nb, level: state.nb_level}); }
 function toggleNR()   { api('/api/nr', {on: !state.nr, level: state.nr_level}); }
 function toggleDNF()  { api('/api/dnf', {on: !state.dnf}); }

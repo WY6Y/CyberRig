@@ -138,6 +138,9 @@ class RigState:
         self.antenna: int = 1
         self.locked: bool = False
         self.mic_gain: int = 50
+        # Internal ATU (CAT AC): on/off + tuning cycle (not external REMOTE TUNE)
+        self.atu: bool = False
+        self.atu_tuning: bool = False
 
 
 class FTdx10:
@@ -161,6 +164,9 @@ class FTdx10:
         self._running = False
         self.state = RigState()
         self.is_connected = False
+        # Internal ATU tune-cycle bookkeeping (radio often won't report P3=2 on read)
+        self._atu_tune_t0: float = 0.0
+        self._atu_saw_tx: bool = False
 
     # ── Callback API ─────────────────────────────────────────────────────────
 
@@ -942,6 +948,70 @@ class FTdx10:
         self.state.antenna = a
         self._fire("antenna_changed", a)
 
+    # ── Internal antenna tuner (AC) ──────────────────────────────────────────
+    # Manual 2308-F: AC P1 P2 P3;
+    #   P1=0 fixed, P2=0 fixed
+    #   P3=0 Tuner OFF · 1 Tuner ON · 2 Tuning Start / Tuning Stop
+    # Set e.g. AC001;  Read AC;  Answer AC00n;
+
+    def get_atu(self) -> Optional[dict]:
+        """Return {'on': bool, 'tuning': bool} or None if unread.
+
+        Note: many FTDX10 firmware builds only answer P3=0/1 on read;
+        P3=2 is primarily a write (start/stop). UI 'tuning' may be driven
+        by software timers + TX activity when the radio never reports 2.
+        """
+        r = self._cmd("AC;")
+        if not r or not r.startswith("AC"):
+            return None
+        code = None
+        if len(r) >= 5 and r[2:4] == "00":
+            try:
+                code = int(r[4])
+            except ValueError:
+                pass
+        if code is None:
+            try:
+                code = int(r[-1])
+            except ValueError:
+                return None
+        return {
+            "on": code in (1, 2),
+            "tuning": code == 2,
+        }
+
+    def set_atu(self, on: bool):
+        """Enable or bypass the FTDX10 internal ATU (AC001 / AC000)."""
+        self._set(f"AC00{'1' if on else '0'};")
+        self.state.atu = bool(on)
+        if not on:
+            self.state.atu_tuning = False
+            self._atu_tune_t0 = 0.0
+            self._atu_saw_tx = False
+        self._fire("atu_changed", self.state.atu, self.state.atu_tuning)
+
+    def atu_tune(self):
+        """Start or stop the internal ATU tuning cycle (AC002).
+
+        P3=2 toggles: first send starts tune (keys radio), second aborts.
+        When finished the radio usually leaves the tuner ON.
+        """
+        if not self.state.atu and not self.state.atu_tuning:
+            self._set("AC001;")
+            self.state.atu = True
+        self._set("AC002;")
+        if self.state.atu_tuning:
+            # Abort
+            self.state.atu_tuning = False
+            self._atu_tune_t0 = 0.0
+            self._atu_saw_tx = False
+        else:
+            self.state.atu_tuning = True
+            self.state.atu = True
+            self._atu_tune_t0 = time.time()
+            self._atu_saw_tx = False
+        self._fire("atu_changed", self.state.atu, self.state.atu_tuning)
+
     # ── Lock ─────────────────────────────────────────────────────────────────
 
     def get_lock(self) -> Optional[bool]:
@@ -1145,9 +1215,47 @@ class FTdx10:
             if changed:
                 self._fire("monitor_changed", self.state.monitor, self.state.mon_level)
 
+    def _poll_atu(self):
+        """Sync internal ATU on/off (+ clear tuning when cycle ends)."""
+        atu = self.get_atu()
+        changed = False
+        if atu is not None:
+            on = bool(atu.get("on"))
+            # Only force tuning=True from CAT if radio reports P3=2
+            if atu.get("tuning"):
+                if not self.state.atu_tuning:
+                    self.state.atu_tuning = True
+                    self._atu_tune_t0 = time.time()
+                    changed = True
+            if on != self.state.atu:
+                self.state.atu = on
+                changed = True
+                if not on and self.state.atu_tuning:
+                    self.state.atu_tuning = False
+                    self._atu_tune_t0 = 0.0
+                    self._atu_saw_tx = False
+
+        if self.state.atu_tuning:
+            if self.state.is_tx:
+                self._atu_saw_tx = True
+            # Cycle done: keyed then returned to RX, or 30s safety timeout
+            elapsed = time.time() - self._atu_tune_t0 if self._atu_tune_t0 else 0
+            if (self._atu_saw_tx and not self.state.is_tx and elapsed > 1.0) or elapsed > 30:
+                self.state.atu_tuning = False
+                self._atu_tune_t0 = 0.0
+                self._atu_saw_tx = False
+                # After a successful cycle the tuner is almost always left ON
+                if not self.state.atu:
+                    self.state.atu = True
+                changed = True
+
+        if changed:
+            self._fire("atu_changed", self.state.atu, self.state.atu_tuning)
+
     def _poll_antenna_cw(self):
         self._assign("antenna", self.get_antenna(), "antenna_changed")
         self._assign("locked", self.get_lock(), "lock_changed")
+        self._poll_atu()
         cw = self.get_cw_speed()
         bi = self.get_cw_breakin()
         if cw is not None or bi is not None:
@@ -1277,6 +1385,11 @@ class FTdx10:
                         self._poll_tx_toggles()
                     elif slot == 7:
                         self._poll_antenna_cw()
+
+                # While internal ATU is cycling, re-check often so TUNE clears
+                # when the radio returns to RX (works during TX meter path too).
+                if self.state.atu_tuning and cycle % 2 == 0:
+                    self._poll_atu()
 
                 err = 0
                 cycle = (cycle + 1) % 64

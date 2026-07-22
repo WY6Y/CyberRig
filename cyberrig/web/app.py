@@ -132,6 +132,8 @@ def _state_dict() -> dict:
         "antenna": s.antenna,
         "locked": s.locked,
         "mic_gain": s.mic_gain,
+        "atu": s.atu,
+        "atu_tuning": s.atu_tuning,
         "macro_running": runner.is_running() if runner else False,
         "tune_active": _tune_active,
         "tune_watts": int(settings.get("tune_watts", 20)),
@@ -214,6 +216,7 @@ async def _startup():
         "dnf_changed", "notch_changed", "contour_changed", "comp_changed",
         "vox_changed", "cw_changed", "af_changed", "rf_changed", "antenna_changed",
         "power_changed", "mic_changed", "monitor_changed", "lock_changed",
+        "atu_changed",
     ]:
         rig.on(event, lambda *_: _broadcast())
 
@@ -1216,6 +1219,23 @@ class AntReq(BaseModel):
 @app.post("/api/antenna")
 async def set_antenna(req: AntReq):
     rig.set_antenna(req.ant); return {"ok": True}
+
+
+# ── Internal ATU (FTDX10 AC command) ─────────────────────────────────────
+# Separate from REMOTE TUNE (external MFJ carrier).
+@app.post("/api/atu")
+async def set_atu(req: BoolReq):
+    """Enable/bypass the radio's built-in antenna tuner."""
+    rig.set_atu(req.on)
+    return {"ok": True, "atu": rig.state.atu, "atu_tuning": rig.state.atu_tuning}
+
+@app.post("/api/atu/tune")
+async def atu_tune():
+    """Start or abort the internal ATU tuning cycle (keys the radio briefly)."""
+    if _tune_active:
+        return {"ok": False, "error": "Remote TUNE is active — stop it first"}
+    rig.atu_tune()
+    return {"ok": True, "atu": rig.state.atu, "atu_tuning": rig.state.atu_tuning}
 
 
 # ── EX menu ───────────────────────────────────────────────────────────────
