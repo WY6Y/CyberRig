@@ -48,17 +48,49 @@
   --freq:    #55ff77;
   --tx-bg:   #2a0a00;
 }
-html, body { height: 100%; background: var(--bg); color: var(--green);
+html {
+  height: 100%;
+  /* iOS PWA: fill screen including under notch / home indicator */
+  height: -webkit-fill-available;
+  background: var(--bg);
+}
+html, body {
+  background: var(--bg); color: var(--green);
   font-family: Consolas, 'Cascadia Mono', 'Segoe UI Mono', 'Courier New', monospace;
-  font-size: 15px; font-weight: 600; -webkit-font-smoothing: antialiased; }
-body { display: flex; flex-direction: column; min-height: 100vh; }
+  font-size: 15px; font-weight: 600; -webkit-font-smoothing: antialiased;
+}
+body {
+  display: flex; flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
+  /* Keep chrome (COM port, Connect) below notch / Dynamic Island / status bar.
+     Requires viewport-fit=cover + apple-mobile-web-app-status-bar-style. */
+  padding-top: constant(safe-area-inset-top);      /* iOS 11.0–11.2 */
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-right: constant(safe-area-inset-right);
+  padding-right: env(safe-area-inset-right, 0px);
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: constant(safe-area-inset-left);
+  padding-left: env(safe-area-inset-left, 0px);
+}
+/* Installed home-screen app: never let top chrome sit under the system status bar */
+@media all and (display-mode: standalone) {
+  body {
+    padding-top: max(12px, constant(safe-area-inset-top));
+    padding-top: max(12px, env(safe-area-inset-top, 12px));
+  }
+}
 button, input { font-weight: 700; }
 
 /* ─── HEADER ─────────────────────────────────────────────────────── */
 #hdr {
   display: flex; align-items: center; gap: 12px;
   background: #050c05; border-bottom: 1px solid var(--border);
-  padding: 8px 12px; flex-shrink: 0; flex-wrap: wrap;
+  padding: 10px 12px; flex-shrink: 0; flex-wrap: wrap;
+  /* Stay above scrolling panels; body already clears the notch via safe-area */
+  position: sticky; top: 0; z-index: 200;
 }
 #hdr .logo { color: var(--gbright); font-weight: 800; font-size: 20px;
   letter-spacing: 3px; margin-right: 8px; }
