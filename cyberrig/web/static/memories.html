@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CyberRig — Memories</title>
+<meta name="theme-color" content="#0b140b">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #060b06; --panel: #0b140b; --border: #2a5a2a;
+  --green: #33ff99; --gdim: #66cc88; --gbright: #66ff66;
+  --orange: #ffaa33; --red: #ff4444; --blue: #44bbff;
+}
+html, body {
+  min-height: 100%; background: var(--bg); color: var(--green);
+  font-family: Consolas, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+  font-size: 14px; font-weight: 600;
+}
+body { display: flex; flex-direction: column; }
+
+#bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 8px 12px; background: #050c05; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 3;
+}
+.logo { font-weight: 800; font-size: 15px; color: var(--gbright); letter-spacing: 1px; }
+button {
+  font-family: inherit; font-weight: 700; font-size: 12px;
+  background: var(--panel); color: var(--green); border: 1px solid var(--border);
+  padding: 6px 10px; cursor: pointer; border-radius: 3px;
+}
+button:hover { border-color: var(--gbright); color: var(--gbright); }
+button.danger { border-color: #553333; color: var(--red); }
+button.danger:hover { border-color: var(--red); }
+button.primary { background: #004422; border-color: var(--gbright); color: var(--gbright); }
+#conn { font-size: 12px; margin-left: auto; color: var(--gdim); }
+#conn.bad { color: var(--orange); }
+
+main { padding: 10px 12px 24px; max-width: 640px; width: 100%; margin: 0 auto; }
+
+input[type=text], input[type=number], select {
+  font-family: inherit; font-weight: 600; font-size: 13px;
+  background: #0d2018; color: var(--green); border: 1px solid var(--border);
+  padding: 5px 8px; border-radius: 3px;
+}
+
+#store-bar {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 5px;
+  padding: 10px; margin-bottom: 14px;
+}
+#store-bar input[type=text] { flex: 1; min-width: 140px; }
+
+.ch-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 5px;
+  margin-bottom: 8px; overflow: hidden;
+}
+.ch-head {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; flex-wrap: wrap;
+}
+.ch-name { font-weight: 800; color: var(--gbright); min-width: 90px; }
+.ch-summary { font-size: 12px; color: var(--gdim); flex: 1; }
+.ch-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.ch-body {
+  border-top: 1px solid var(--border); padding: 8px 10px; display: none;
+}
+.ch-body.open { display: block; }
+.row { display: flex; align-items: center; gap: 8px; margin: 5px 0; flex-wrap: wrap; }
+.row label { min-width: 70px; font-size: 12px; color: var(--gdim); font-weight: 700; }
+.row input[type=range] { flex: 1; min-width: 100px; accent-color: #33ff99; }
+.row .val { min-width: 60px; text-align: right; font-size: 12px; color: var(--gbright); }
+.btn-group button.active { background: #004422; border-color: var(--gbright); color: var(--gbright); }
+
+.hint { font-size: 11px; color: var(--gdim); margin: 6px 0 12px; }
+.empty { font-size: 12px; color: var(--gdim); padding: 10px 0; }
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <button onclick="backToMain()" title="Back to main CyberRig screen">← BACK</button>
+  <span class="logo">CYBERRIG · MEMORIES</span>
+  <span id="conn">checking…</span>
+</div>
+
+<main>
+  <div id="store-bar">
+    <input type="text" id="store-name" placeholder="Name this spot (e.g. 40m Net)">
+    <button class="primary" onclick="storeCurrent()">💾 Store Current Rig State</button>
+  </div>
+  <div class="hint">Snapshots freq, mode, power, filter width, ATT, and preamp exactly as the rig is set right now. Tap RECALL to write a saved spot back to the radio; expand a card to edit its saved values by hand.</div>
+  <div id="ch-list"></div>
+</main>
+
+<script>
+function backToMain() { location.href = '/'; }
+
+async function api(path, body = {}) {
+  try {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  } catch (e) { console.error('api', path, e); }
+}
+
+const _debounceMap = {};
+function debounce(key, fn, ms = 400) {
+  clearTimeout(_debounceMap[key]);
+  _debounceMap[key] = setTimeout(fn, ms);
+}
+
+async function refreshConn() {
+  const el = document.getElementById('conn');
+  try {
+    const r = await fetch('/api/state').then(r => r.json());
+    if (r.connected) { el.textContent = 'CONNECTED'; el.classList.remove('bad'); }
+    else { el.textContent = 'NOT CONNECTED'; el.classList.add('bad'); }
+  } catch (e) { el.textContent = 'offline'; el.classList.add('bad'); }
+}
+refreshConn();
+setInterval(refreshConn, 5000);
+
+const MODES = ['LSB','USB','CW-U','CW-L','AM','AM-N','FM','FM-N',
+               'RTTY-L','RTTY-U','DATA-U','DATA-L','PSK'];
+const ATT_OPTS = ['OFF','6dB','12dB','18dB'];
+const PREAMP_OPTS = ['IPO','AMP1','AMP2'];
+
+// Approx SH table for display only — server is authoritative on recall.
+const SH_HZ_SSB = [0,300,400,600,850,1100,1200,1500,1650,1800,1950,2100,2250,2400,
+  2450,2500,2600,2700,2800,2900,3000,3200,3500,4000];
+const SH_HZ_CW = [0,50,100,150,200,250,300,350,400,450,500,600,800,1200,1400,1700,
+  2000,2400,3000,3200,3500,4000];
+function shHzFor(code, mode) {
+  const t = (mode || '').toUpperCase().includes('CW') ? SH_HZ_CW : SH_HZ_SSB;
+  return t[Math.min(+code, t.length - 1)] || 0;
+}
+
+let channels = [];
+let openIdx = null;
+
+function fmtFreq(hz) {
+  const m = Math.floor(hz / 1e6);
+  const k = Math.floor((hz % 1e6) / 1e3);
+  const h = hz % 1000;
+  return `${m}.${String(k).padStart(3,'0')}.${String(h).padStart(3,'0')}`;
+}
+
+async function load() {
+  channels = await fetch('/api/memories').then(r => r.json());
+  render();
+}
+
+async function storeCurrent() {
+  const name = document.getElementById('store-name').value.trim();
+  const r = await api('/api/memories/store', { name });
+  if (r && r.ok) {
+    channels = r.memories;
+    document.getElementById('store-name').value = '';
+    render();
+  }
+}
+
+function recall(i) { api(`/api/memories/recall/${i}`); }
+
+async function delChannel(i) {
+  if (!confirm(`Delete memory "${channels[i].name}"?`)) return;
+  const r = await api(`/api/memories/delete/${i}`);
+  if (r && r.ok) { channels = r.memories; if (openIdx === i) openIdx = null; render(); }
+}
+
+function moveChannel(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= channels.length) return;
+  [channels[i], channels[j]] = [channels[j], channels[i]];
+  if (openIdx === i) openIdx = j; else if (openIdx === j) openIdx = i;
+  render();
+  saveAll();
+}
+
+function toggleOpen(i) { openIdx = (openIdx === i) ? null : i; render(); }
+
+function saveAll() {
+  debounce('save', () => api('/api/memories/save', { memories: channels }));
+}
+
+function escAttr(s) { return (s || '').replace(/"/g, '&quot;'); }
+
+function render() {
+  const list = document.getElementById('ch-list');
+  list.innerHTML = '';
+  if (!channels.length) {
+    list.innerHTML = '<div class="empty">No saved spots yet — set the rig how you want it and hit "Store Current Rig State" above.</div>';
+    return;
+  }
+  channels.forEach((ch, i) => {
+    const card = document.createElement('div');
+    card.className = 'ch-card';
+
+    const head = document.createElement('div');
+    head.className = 'ch-head';
+    head.innerHTML = `
+      <span class="ch-name">${escAttr(ch.name)}</span>
+      <span class="ch-summary">${fmtFreq(ch.freq)} · ${ch.mode} · ${ch.power}W · ${shHzFor(ch.sh, ch.mode)}Hz · ${ch.att} · ${ch.preamp}</span>
+      <div class="ch-actions">
+        <button class="primary" onclick="event.stopPropagation(); recall(${i})" title="Write this back to the radio">📡 RECALL</button>
+        <button onclick="event.stopPropagation(); moveChannel(${i},-1)" title="Move up">▲</button>
+        <button onclick="event.stopPropagation(); moveChannel(${i},1)" title="Move down">▼</button>
+        <button class="danger" onclick="event.stopPropagation(); delChannel(${i})" title="Delete">🗑</button>
+      </div>`;
+    head.addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON') toggleOpen(i); });
+    card.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'ch-body' + (openIdx === i ? ' open' : '');
+    const maxSh = (ch.mode || '').toUpperCase().includes('CW') ? SH_HZ_CW.length - 1 : SH_HZ_SSB.length - 1;
+    body.innerHTML = `
+      <div class="row"><label>Name</label>
+        <input type="text" value="${escAttr(ch.name)}" onchange="channels[${i}].name=this.value; render(); saveAll()"></div>
+      <div class="row"><label>Freq</label>
+        <input type="number" step="0.0001" min="0.03" max="75" value="${(ch.freq/1e6).toFixed(4)}"
+          onchange="channels[${i}].freq=Math.round(+this.value*1e6); render(); saveAll()"> MHz</div>
+      <div class="row"><label>Mode</label>
+        <select onchange="channels[${i}].mode=this.value; render(); saveAll()">
+          ${MODES.map(m => `<option value="${m}" ${m===ch.mode?'selected':''}>${m}</option>`).join('')}
+        </select></div>
+      <div class="row"><label>Power</label>
+        <input type="range" min="5" max="100" value="${ch.power}"
+          oninput="channels[${i}].power=+this.value; this.nextElementSibling.textContent=this.value+' W'; saveAll()">
+        <span class="val">${ch.power} W</span></div>
+      <div class="row"><label>Filter</label>
+        <input type="range" min="0" max="${maxSh}" value="${ch.sh}"
+          oninput="channels[${i}].sh=+this.value; this.nextElementSibling.textContent=shHzFor(this.value, channels[${i}].mode)+' Hz'; saveAll()">
+        <span class="val">${shHzFor(ch.sh, ch.mode)} Hz</span></div>
+      <div class="row"><label>ATT</label>
+        <div class="btn-group" style="display:flex;gap:4px">
+          ${ATT_OPTS.map(a => `<button class="${a===ch.att?'active':''}"
+            onclick="channels[${i}].att='${a}'; render(); saveAll()">${a}</button>`).join('')}
+        </div></div>
+      <div class="row"><label>Preamp</label>
+        <div class="btn-group" style="display:flex;gap:4px">
+          ${PREAMP_OPTS.map(p => `<button class="${p===ch.preamp?'active':''}"
+            onclick="channels[${i}].preamp='${p}'; render(); saveAll()">${p}</button>`).join('')}
+        </div></div>
+    `;
+    card.appendChild(body);
+    list.appendChild(card);
+  });
+}
+
+load();
+</script>
+</body>
+</html>

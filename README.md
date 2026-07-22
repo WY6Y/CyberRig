@@ -29,7 +29,9 @@ closed desktop controllers.
 | **Waterfall** | Separate window: USB-audio FFT + click-to-QSY |
 | **LAN / VPN audio** | Optional RX listen stream; experimental remote mic TX |
 | **rigctld** | Hamlib-compatible TCP on port **4532** for WSJT-X, fldigi, N1MM, etc. |
-| **Macros** | JSON step sequences with `$CALL` / frequency substitution |
+| **Parametric EQ** | TX DSP EQ + Mic P-EQ, 3 bands each (CAT `EX 03 03`) — separate window |
+| **Macros** | JSON step sequences with `$CALL` / frequency substitution, plus a full add/edit/delete/reorder editor — separate window |
+| **Memory channels** | Snapshot freq/mode/power/filter width/ATT/preamp as a named slot; one-tap recall; edit saved slots afterward — separate window |
 | **PWA** | Installable shell (icons + service worker; live API never cached) |
 
 Legacy PySide6 desktop code lives under `cyberrig/ui_legacy/` and is **not** the
@@ -103,6 +105,7 @@ CyberRig/
 │   ├── web/static/         # UI, PWA, waterfall, audio/TX helpers
 │   ├── audio/              # RX FFT waterfall + optional TX USB audio
 │   ├── macros/             # Macro model / store / runner
+│   ├── memories/           # Frequency memory channel model / store
 │   ├── server/rigctl.py    # Hamlib NET rigctl bridge
 │   ├── settings.py         # Persistent settings
 │   └── ui_legacy/          # Archived desktop UI (not required for web)
@@ -115,7 +118,7 @@ CyberRig/
 
 | Key | Default | Notes |
 |-----|---------|--------|
-| `cat_port` | `COM3` | Serial device for CAT (e.g. `COM6`, `/dev/ttyUSB0`) |
+| `cat_port` | `COM6` | Serial device for CAT (e.g. `COM6`, `/dev/ttyUSB0`) — check Device Manager, it varies per PC |
 | `cat_baud` | `38400` | FTDX10 fixed rate |
 | `poll_interval` | `0.3` | Seconds between CAT poll cycles |
 | `rigctl_port` | `4532` | Hamlib TCP port |

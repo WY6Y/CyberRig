@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CyberRig — Macros</title>
+<meta name="theme-color" content="#0b140b">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #060b06; --panel: #0b140b; --border: #2a5a2a;
+  --green: #33ff99; --gdim: #66cc88; --gbright: #66ff66;
+  --orange: #ffaa33; --red: #ff4444;
+}
+html, body {
+  min-height: 100%; background: var(--bg); color: var(--green);
+  font-family: Consolas, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+  font-size: 14px; font-weight: 600;
+}
+body { display: flex; flex-direction: column; }
+
+#bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 8px 12px; background: #050c05; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 3;
+}
+.logo { font-weight: 800; font-size: 15px; color: var(--gbright); letter-spacing: 1px; }
+button {
+  font-family: inherit; font-weight: 700; font-size: 12px;
+  background: var(--panel); color: var(--green); border: 1px solid var(--border);
+  padding: 6px 10px; cursor: pointer; border-radius: 3px;
+}
+button:hover { border-color: var(--gbright); color: var(--gbright); }
+button.danger { border-color: #553333; color: var(--red); }
+button.danger:hover { border-color: var(--red); }
+button.primary { border-color: var(--gbright); color: var(--gbright); }
+#new-btn { margin-left: auto; }
+
+main { padding: 10px 12px 24px; max-width: 640px; width: 100%; margin: 0 auto; }
+
+input[type=text], input[type=number], select, textarea {
+  font-family: inherit; font-weight: 600; font-size: 13px;
+  background: #0d2018; color: var(--green); border: 1px solid var(--border);
+  padding: 5px 8px; border-radius: 3px;
+}
+
+.macro-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 5px;
+  margin-bottom: 10px; overflow: hidden;
+}
+.macro-head {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  cursor: pointer; flex-wrap: wrap;
+}
+.macro-head input[type=text] { flex: 1; min-width: 120px; }
+.macro-swatch {
+  width: 18px; height: 18px; border-radius: 3px; border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.macro-key { width: 42px; text-align: center; }
+.macro-desc { flex-basis: 100%; font-size: 11px; color: var(--gdim); }
+.macro-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.macro-body {
+  border-top: 1px solid var(--border); padding: 8px 10px; display: none;
+}
+.macro-body.open { display: block; }
+
+.step-row {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 5px 0; border-bottom: 1px dashed var(--border);
+}
+.step-row:last-of-type { border-bottom: none; }
+.step-row select.step-type { min-width: 96px; }
+.step-field { flex: 1; min-width: 100px; }
+.step-actions { display: flex; gap: 3px; margin-left: auto; }
+.step-actions button { padding: 3px 6px; }
+
+.hint { font-size: 11px; color: var(--gdim); margin: 6px 0; }
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <button onclick="backToMain()" title="Back to main CyberRig screen">← BACK</button>
+  <span class="logo">CYBERRIG · MACROS</span>
+  <button id="new-btn" onclick="addMacro()">+ New Macro</button>
+  <button class="danger" onclick="resetDefaults()">↻ Reset to Defaults</button>
+</div>
+
+<main>
+  <div class="hint">Changes save automatically. Click a macro's title bar to open its steps.</div>
+  <div id="macro-list"></div>
+</main>
+
+<script>
+function backToMain() { location.href = '/'; }
+
+async function api(path, body = {}) {
+  try {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  } catch (e) { console.error('api', path, e); }
+}
+
+const _debounceMap = {};
+function debounce(key, fn, ms = 400) {
+  clearTimeout(_debounceMap[key]);
+  _debounceMap[key] = setTimeout(fn, ms);
+}
+
+const MODES = ['LSB','USB','CW-U','CW-L','AM','AM-N','FM','FM-N',
+               'RTTY-L','RTTY-U','DATA-U','DATA-L','PSK'];
+const STEP_TYPES = ['cat','delay','set_freq','set_mode','set_power','cw','ptt_on','ptt_off','comment'];
+
+let macros = [];
+let openIdx = null; // which macro card is expanded
+
+function emptyMacro() {
+  return { name: 'New Macro', key: '', color: '#1a4a2a', desc: '', steps: [] };
+}
+function emptyStep(stype) {
+  return { stype, cmd: '', ms: 100, hz: 14200000, mode: 'USB', watts: 50, text: '' };
+}
+
+async function load() {
+  macros = await fetch('/api/macros').then(r => r.json());
+  render();
+}
+
+function saveAll() {
+  debounce('save', () => api('/api/macros/save', { macros }));
+}
+
+function addMacro() {
+  macros.push(emptyMacro());
+  openIdx = macros.length - 1;
+  render();
+  saveAll();
+}
+
+function deleteMacro(i) {
+  if (!confirm(`Delete macro "${macros[i].name}"?`)) return;
+  macros.splice(i, 1);
+  if (openIdx === i) openIdx = null;
+  render();
+  saveAll();
+}
+
+function moveMacro(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= macros.length) return;
+  [macros[i], macros[j]] = [macros[j], macros[i]];
+  if (openIdx === i) openIdx = j; else if (openIdx === j) openIdx = i;
+  render();
+  saveAll();
+}
+
+async function resetDefaults() {
+  if (!confirm('Reset macros to the built-in defaults? This replaces your custom macros.')) return;
+  const r = await api('/api/macros/reset_defaults');
+  if (r && r.ok) { macros = r.macros; openIdx = null; render(); }
+}
+
+function runMacro(i) { api(`/api/macros/run/${i}`); }
+function stopMacros() { api('/api/macros/stop'); }
+
+function toggleOpen(i) { openIdx = (openIdx === i) ? null : i; render(); }
+
+function addStep(mi) {
+  macros[mi].steps.push(emptyStep('comment'));
+  render();
+  saveAll();
+}
+function deleteStep(mi, si) {
+  macros[mi].steps.splice(si, 1);
+  render();
+  saveAll();
+}
+function moveStep(mi, si, dir) {
+  const steps = macros[mi].steps;
+  const j = si + dir;
+  if (j < 0 || j >= steps.length) return;
+  [steps[si], steps[j]] = [steps[j], steps[si]];
+  render();
+  saveAll();
+}
+
+function stepFieldHtml(mi, si, step) {
+  const t = step.stype;
+  if (t === 'cat') {
+    return `<input type="text" class="step-field" placeholder="e.g. NB01;" value="${escAttr(step.cmd)}"
+      onchange="macros[${mi}].steps[${si}].cmd=this.value; saveAll()">`;
+  }
+  if (t === 'delay') {
+    return `<input type="number" class="step-field" min="0" max="60000" step="50" value="${step.ms}"
+      onchange="macros[${mi}].steps[${si}].ms=+this.value; saveAll()"> ms`;
+  }
+  if (t === 'set_freq') {
+    const mhz = (step.hz / 1e6).toFixed(4);
+    return `<input type="number" class="step-field" min="0.03" max="75" step="0.0001" value="${mhz}"
+      onchange="macros[${mi}].steps[${si}].hz=Math.round(+this.value*1e6); saveAll()"> MHz`;
+  }
+  if (t === 'set_mode') {
+    return `<select class="step-field" onchange="macros[${mi}].steps[${si}].mode=this.value; saveAll()">
+      ${MODES.map(m => `<option value="${m}" ${m === step.mode ? 'selected' : ''}>${m}</option>`).join('')}
+    </select>`;
+  }
+  if (t === 'set_power') {
+    return `<input type="number" class="step-field" min="5" max="100" value="${step.watts}"
+      onchange="macros[${mi}].steps[${si}].watts=+this.value; saveAll()"> W`;
+  }
+  if (t === 'cw' || t === 'comment') {
+    return `<input type="text" class="step-field" placeholder="${t === 'cw' ? 'CQ CQ DE $CALL K' : 'note'}"
+      value="${escAttr(step.text)}" onchange="macros[${mi}].steps[${si}].text=this.value; saveAll()">`;
+  }
+  return ''; // ptt_on / ptt_off — no extra field
+}
+
+function escAttr(s) { return (s || '').replace(/"/g, '&quot;'); }
+
+function render() {
+  const list = document.getElementById('macro-list');
+  list.innerHTML = '';
+  macros.forEach((m, mi) => {
+    const card = document.createElement('div');
+    card.className = 'macro-card';
+
+    const head = document.createElement('div');
+    head.className = 'macro-head';
+    head.innerHTML = `
+      <span class="macro-swatch" style="background:${m.color}"></span>
+      <input type="text" value="${escAttr(m.name)}" title="Macro name"
+        onclick="event.stopPropagation()"
+        onchange="macros[${mi}].name=this.value; saveAll()">
+      <input type="text" class="macro-key" value="${escAttr(m.key)}" placeholder="key" title="Shortcut key, e.g. F1"
+        onclick="event.stopPropagation()"
+        onchange="macros[${mi}].key=this.value; saveAll()">
+      <input type="color" value="${m.color}" title="Button color" style="padding:0;width:28px;height:24px"
+        onclick="event.stopPropagation()"
+        onchange="macros[${mi}].color=this.value; render(); saveAll()">
+      <div class="macro-actions">
+        <button onclick="event.stopPropagation(); runMacro(${mi})" title="Run now">▶ Run</button>
+        <button onclick="event.stopPropagation(); moveMacro(${mi},-1)" title="Move up">▲</button>
+        <button onclick="event.stopPropagation(); moveMacro(${mi},1)" title="Move down">▼</button>
+        <button class="danger" onclick="event.stopPropagation(); deleteMacro(${mi})" title="Delete">🗑</button>
+      </div>
+      <input type="text" class="macro-desc" style="flex-basis:100%" value="${escAttr(m.desc)}" placeholder="Description"
+        onclick="event.stopPropagation()"
+        onchange="macros[${mi}].desc=this.value; saveAll()">
+    `;
+    head.addEventListener('click', () => toggleOpen(mi));
+    card.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'macro-body' + (openIdx === mi ? ' open' : '');
+    m.steps.forEach((step, si) => {
+      const row = document.createElement('div');
+      row.className = 'step-row';
+      row.innerHTML = `
+        <select class="step-type" onchange="macros[${mi}].steps[${si}].stype=this.value; render(); saveAll()">
+          ${STEP_TYPES.map(t => `<option value="${t}" ${t === step.stype ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+        ${stepFieldHtml(mi, si, step)}
+        <div class="step-actions">
+          <button onclick="moveStep(${mi},${si},-1)" title="Move up">▲</button>
+          <button onclick="moveStep(${mi},${si},1)" title="Move down">▼</button>
+          <button class="danger" onclick="deleteStep(${mi},${si})" title="Remove step">✕</button>
+        </div>`;
+      body.appendChild(row);
+    });
+    const addBtn = document.createElement('button');
+    addBtn.textContent = '+ Add Step';
+    addBtn.style.marginTop = '6px';
+    addBtn.onclick = () => addStep(mi);
+    body.appendChild(addBtn);
+    if (m.steps.some(s => s.stype === 'cw')) {
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = 'CW text vars: $CALL, $FREQ_A, $MODE';
+      body.appendChild(hint);
+    }
+    card.appendChild(body);
+    list.appendChild(card);
+  });
+}
+
+load();
+</script>
+</body>
+</html>

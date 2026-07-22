@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CyberRig — Parametric EQ</title>
+<meta name="theme-color" content="#0b140b">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #060b06; --panel: #0b140b; --border: #2a5a2a;
+  --green: #33ff99; --gdim: #66cc88; --gbright: #66ff66;
+  --orange: #ffaa33; --red: #ff4444;
+}
+html, body {
+  min-height: 100%; background: var(--bg); color: var(--green);
+  font-family: Consolas, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+  font-size: 14px; font-weight: 600;
+}
+body { display: flex; flex-direction: column; }
+
+#bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 8px 12px; background: #050c05; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 3;
+}
+.logo { font-weight: 800; font-size: 15px; color: var(--gbright); letter-spacing: 1px; }
+button {
+  font-family: inherit; font-weight: 700; font-size: 12px;
+  background: var(--panel); color: var(--green); border: 1px solid var(--border);
+  padding: 6px 10px; cursor: pointer;
+}
+button:hover { border-color: var(--gbright); color: var(--gbright); }
+#conn { font-size: 12px; margin-left: auto; color: var(--gdim); }
+#conn.bad { color: var(--orange); }
+
+main { padding: 10px 12px 24px; max-width: 520px; width: 100%; margin: 0 auto; }
+
+.section { margin-bottom: 14px; }
+.section-title {
+  font-size: 13px; font-weight: 800; color: var(--gbright);
+  margin: 4px 0 6px; letter-spacing: .5px;
+}
+.band {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 4px; padding: 8px 10px; margin-bottom: 8px;
+}
+.band-title { font-size: 11px; color: var(--gdim); margin-bottom: 6px; }
+.row {
+  display: flex; align-items: center; gap: 8px; margin: 5px 0;
+}
+.row label { min-width: 42px; font-size: 12px; color: var(--gdim); font-weight: 700; }
+.row input[type=range] { flex: 1; accent-color: #33ff99; }
+.row .val { min-width: 60px; text-align: right; font-size: 12px; color: var(--gbright); }
+
+.read-btn { width: 100%; margin-top: 2px; }
+hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <button onclick="backToMain()" title="Back to main CyberRig screen">← BACK</button>
+  <span class="logo">CYBERRIG · PARAMETRIC EQ</span>
+  <span id="conn">checking…</span>
+</div>
+
+<main>
+  <div class="section">
+    <div class="section-title">TX DSP EQ</div>
+    <div id="eq-tx-bands"></div>
+    <button class="read-btn" onclick="eqReadSection('tx')">↓ Read from Radio</button>
+  </div>
+
+  <hr>
+
+  <div class="section">
+    <div class="section-title">Mic Parametric EQ</div>
+    <div id="eq-mic-bands"></div>
+    <button class="read-btn" onclick="eqReadSection('mic')">↓ Read from Radio</button>
+  </div>
+</main>
+
+<script>
+// Always navigate back to the main screen in-place. On iOS, window.open()
+// does not create a real popup (no window chrome/back button), so this
+// window/tab must always be able to get back on its own — don't rely on
+// window.close()/window.opener, iOS won't reliably honor them.
+function backToMain() { location.href = '/'; }
+
+async function api(path, body = {}) {
+  try {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  } catch (e) { console.error('api', path, e); }
+}
+
+const _debounceMap = {};
+function debounce(key, fn, ms = 150) {
+  clearTimeout(_debounceMap[key]);
+  _debounceMap[key] = setTimeout(fn, ms);
+}
+
+async function refreshConn() {
+  const el = document.getElementById('conn');
+  try {
+    const r = await fetch('/api/state').then(r => r.json());
+    if (r.connected) {
+      el.textContent = 'CONNECTED';
+      el.classList.remove('bad');
+    } else {
+      el.textContent = 'NOT CONNECTED — connect on main screen first';
+      el.classList.add('bad');
+    }
+  } catch (e) {
+    el.textContent = 'offline';
+    el.classList.add('bad');
+  }
+}
+refreshConn();
+setInterval(refreshConn, 5000);
+
+// ── Parametric EQ (EX 03 03: TX DSP EQ / Mic P-EQ) ──────────────────────
+// Read-on-demand only (radio-menu items, not continuously polled).
+const EQ_FREQ_OPTIONS = {
+  low:  {0:"OFF",1:"100",2:"200",3:"300",4:"400",5:"500",6:"600",7:"700"},
+  mid:  {0:"OFF",1:"700",2:"800",3:"900",4:"1000",5:"1100",6:"1200",7:"1300",8:"1400",9:"1500"},
+  high: {0:"OFF",1:"1500",2:"1600",3:"1700",4:"1800",5:"1900",6:"2000",7:"2100",8:"2200",
+         9:"2300",10:"2400",11:"2500",12:"2600",13:"2700",14:"2800",15:"2900",16:"3000",
+         17:"3100",18:"3200"}
+};
+const EQ_BAND_RANGE = ['low', 'mid', 'high'];
+
+function eqFreqLabel(band, idx) {
+  const opt = EQ_FREQ_OPTIONS[EQ_BAND_RANGE[band]][idx];
+  return opt === undefined ? String(idx) : opt;
+}
+
+function buildEqSection(section) {
+  const container = document.getElementById(`eq-${section}-bands`);
+  EQ_BAND_RANGE.forEach((range, band) => {
+    const maxIdx = Math.max(...Object.keys(EQ_FREQ_OPTIONS[range]).map(Number));
+    const wrap = document.createElement('div');
+    wrap.className = 'band';
+    wrap.innerHTML = `
+      <div class="band-title">Band ${band + 1} (${range})</div>
+      <div class="row"><label>Freq</label>
+        <input type="range" min="0" max="${maxIdx}" step="1" value="0" id="eq-${section}-${band}-freq"
+               oninput="eqSliderInput('${section}',${band})">
+        <span class="val" id="eq-${section}-${band}-freq-val">OFF</span></div>
+      <div class="row"><label>Level</label>
+        <input type="range" min="-20" max="10" step="1" value="0" id="eq-${section}-${band}-level"
+               oninput="eqSliderInput('${section}',${band})">
+        <span class="val" id="eq-${section}-${band}-level-val">+0 dB</span></div>
+      <div class="row"><label>BW</label>
+        <input type="range" min="1" max="10" step="1" value="5" id="eq-${section}-${band}-bw"
+               oninput="eqSliderInput('${section}',${band})">
+        <span class="val" id="eq-${section}-${band}-bw-val">5</span></div>`;
+    container.appendChild(wrap);
+  });
+}
+
+function eqSliderInput(section, band) {
+  const freq = +document.getElementById(`eq-${section}-${band}-freq`).value;
+  const level = +document.getElementById(`eq-${section}-${band}-level`).value;
+  const bw = +document.getElementById(`eq-${section}-${band}-bw`).value;
+  document.getElementById(`eq-${section}-${band}-freq-val`).textContent =
+    freq === 0 ? 'OFF' : eqFreqLabel(band, freq) + ' Hz';
+  document.getElementById(`eq-${section}-${band}-level-val`).textContent =
+    (level >= 0 ? '+' : '') + level + ' dB';
+  document.getElementById(`eq-${section}-${band}-bw-val`).textContent = bw;
+  debounce(`eq-${section}-${band}`, () => api('/api/eq/write', {section, band, freq, level, bw}));
+}
+
+async function eqReadSection(section) {
+  for (let band = 0; band < 3; band++) {
+    const r = await api('/api/eq/read', {section, band});
+    if (!r || !r.ok) continue;
+    document.getElementById(`eq-${section}-${band}-freq`).value = r.freq;
+    document.getElementById(`eq-${section}-${band}-level`).value = r.level;
+    document.getElementById(`eq-${section}-${band}-bw`).value = r.bw;
+    document.getElementById(`eq-${section}-${band}-freq-val`).textContent =
+      r.freq === 0 ? 'OFF' : eqFreqLabel(band, r.freq) + ' Hz';
+    document.getElementById(`eq-${section}-${band}-level-val`).textContent =
+      (r.level >= 0 ? '+' : '') + r.level + ' dB';
+    document.getElementById(`eq-${section}-${band}-bw-val`).textContent = r.bw;
+  }
+}
+
+buildEqSection('tx');
+buildEqSection('mic');
+eqReadSection('tx');
+eqReadSection('mic');
+</script>
+</body>
+</html>

@@ -89,6 +89,22 @@ BAND_DEFAULT_FREQ = {
     "12m": 24940000, "10m": 28500000, "6m": 50125000,
 }
 
+# 3-band parametric EQ (EX 03 03), per CAT manual Table 2:
+#   TX DSP EQ (PRMTRC EQ):   bands 1-3 -> P3 bases 02, 05, 08
+#   MIC P-EQ  (P PRMTRC EQ): bands 1-3 -> P3 bases 11, 14, 17
+# Each band is 3 consecutive P3 offsets: freq code, level, bandwidth.
+EQ_BASES = {"tx": [2, 5, 8], "mic": [11, 14, 17]}
+EQ_BAND_RANGE = ["low", "mid", "high"]  # per band index 0/1/2
+
+EQ_FREQ_OPTIONS = {
+    "low":  {0: "OFF", 1: "100", 2: "200", 3: "300", 4: "400", 5: "500", 6: "600", 7: "700"},
+    "mid":  {0: "OFF", 1: "700", 2: "800", 3: "900", 4: "1000", 5: "1100", 6: "1200",
+             7: "1300", 8: "1400", 9: "1500"},
+    "high": {0: "OFF", 1: "1500", 2: "1600", 3: "1700", 4: "1800", 5: "1900", 6: "2000",
+             7: "2100", 8: "2200", 9: "2300", 10: "2400", 11: "2500", 12: "2600",
+             13: "2700", 14: "2800", 15: "2900", 16: "3000", 17: "3100", 18: "3200"},
+}
+
 
 class RigState:
     def __init__(self):
@@ -1057,6 +1073,29 @@ class FTdx10:
     def ex_write(self, p1: int, p2: int, p3: int, value: str):
         self._set(f"EX{p1:02d}{p2:02d}{p3:02d}{value};")
 
+    # ── Parametric EQ (EX 03 03) ────────────────────────────────────────────
+    # section: "tx" (TX DSP EQ) or "mic" (Mic P-EQ); band: 0/1/2 (low/mid/high)
+
+    def get_eq_band(self, section: str, band: int) -> Optional[dict]:
+        base = EQ_BASES[section][band]
+        fc = self.ex_read(3, 3, base)
+        lv = self.ex_read(3, 3, base + 1)
+        bw = self.ex_read(3, 3, base + 2)
+        if fc is None or lv is None or bw is None:
+            return None
+        try:
+            return {"freq": int(fc), "level": int(lv) - 20, "bw": int(bw)}
+        except ValueError:
+            return None
+
+    def set_eq_band(self, section: str, band: int, freq: int, level: int, bw: int):
+        """freq/bw are raw EX codes (see EQ_FREQ_OPTIONS); level is signed dB (-20..+10)."""
+        base = EQ_BASES[section][band]
+        lv_val = level + 20
+        self.ex_write(3, 3, base, f"{freq:02d}")
+        self.ex_write(3, 3, base + 1, f"{lv_val:03d}")
+        self.ex_write(3, 3, base + 2, f"{bw:02d}")
+
     # ── IF composite read ─────────────────────────────────────────────────────
     # [0:2]=IF [2:5]=mem [5:14]=freq(9) [14]=sign [15:19]=clari(4)
     # [19]=RXclar [20]=TXclar [21]=mode [22]=vfo …
@@ -1399,4 +1438,7 @@ class FTdx10:
                     self.is_connected = False
                     self._fire("connected_changed", False)
                     break
-            time.sleep(interval)
+            # PO/ALC/SWR only move while transmitting — poll much faster then
+            # (RX-side cadence is unchanged, so front-panel tracking traffic
+            # doesn't increase when meters don't matter).
+            time.sleep(0.08 if self.state.is_tx else interval)

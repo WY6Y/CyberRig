@@ -16,7 +16,10 @@ from cyberrig.audio.tx_audio import tx_engine
 from cyberrig.audio.waterfall import engine as wf_engine
 from cyberrig.cat.ftdx10 import FTdx10, sh_hz
 from cyberrig.macros.engine import MacroRunner
-from cyberrig.macros.store import load_macros, save_macros
+from cyberrig.macros.model import Macro
+from cyberrig.macros.store import load_macros, save_macros, reset_to_defaults as reset_macros_to_defaults
+from cyberrig.memories.model import MemoryChannel
+from cyberrig.memories.store import load_memories, save_memories
 from cyberrig.server.rigctl import RigctlServer
 from cyberrig.settings import Settings
 
@@ -32,6 +35,7 @@ settings = Settings()
 rig = FTdx10()
 runner: Optional[MacroRunner] = None
 macros = load_macros()
+memories = load_memories()
 _rigctld: Optional[RigctlServer] = None
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 _wf_clients: list[WebSocket] = []
@@ -688,6 +692,24 @@ async def waterfall_page():
     return FileResponse(str(_STATIC / "waterfall.html"))
 
 
+@app.get("/eq")
+async def eq_page():
+    """Separate-window parametric EQ (TX DSP EQ / Mic P-EQ)."""
+    return FileResponse(str(_STATIC / "eq.html"))
+
+
+@app.get("/macros-editor")
+async def macros_editor_page():
+    """Separate-window macro configuration (add/edit/delete/reorder + run)."""
+    return FileResponse(str(_STATIC / "macros-editor.html"))
+
+
+@app.get("/memories")
+async def memories_page():
+    """Separate-window frequency memory channels (store/recall/edit)."""
+    return FileResponse(str(_STATIC / "memories.html"))
+
+
 @app.get("/manifest.json")
 async def manifest_root():
     """Some install prompts look at /manifest.json; primary is /static/manifest.json."""
@@ -1238,6 +1260,34 @@ async def atu_tune():
     return {"ok": True, "atu": rig.state.atu, "atu_tuning": rig.state.atu_tuning}
 
 
+# ── Parametric EQ (EX 03 03: TX DSP EQ / Mic P-EQ) ───────────────────────
+# Read on demand only (not part of the continuous poll) — matches the old
+# desktop panel's "Read from Radio" UX; these are radio-menu items, not
+# things that drift on their own.
+class EQReadReq(BaseModel):
+    section: str  # "tx" | "mic"
+    band: int     # 0/1/2 = low/mid/high
+
+class EQWriteReq(BaseModel):
+    section: str
+    band: int
+    freq: int   # raw EX code, see EQ_FREQ_OPTIONS per band range
+    level: int  # signed dB, -20..+10
+    bw: int     # 1..10
+
+@app.post("/api/eq/read")
+async def eq_read(req: EQReadReq):
+    val = rig.get_eq_band(req.section, req.band)
+    if val is None:
+        return {"ok": False, "error": "no response from radio"}
+    return {"ok": True, **val}
+
+@app.post("/api/eq/write")
+async def eq_write(req: EQWriteReq):
+    rig.set_eq_band(req.section, req.band, req.freq, req.level, req.bw)
+    return {"ok": True}
+
+
 # ── EX menu ───────────────────────────────────────────────────────────────
 class EXReq(BaseModel):
     p1: int; p2: int; p3: int
@@ -1277,3 +1327,81 @@ async def stop_macro():
     if runner:
         runner.stop()
     return {"ok": True}
+
+
+class MacrosSaveReq(BaseModel):
+    macros: list[dict]
+
+@app.post("/api/macros/save")
+async def save_macros_endpoint(req: MacrosSaveReq):
+    """Replace the whole macro list (editor does full add/edit/delete/reorder client-side)."""
+    new_macros = [Macro.from_dict(d) for d in req.macros]
+    macros[:] = new_macros
+    save_macros(macros)
+    return {"ok": True, "macros": [m.to_dict() for m in macros]}
+
+@app.post("/api/macros/reset_defaults")
+async def reset_macros_endpoint():
+    macros[:] = reset_macros_to_defaults()
+    return {"ok": True, "macros": [m.to_dict() for m in macros]}
+
+
+# ── Memory channels ───────────────────────────────────────────────────────
+# Snapshots of freq/mode/power/filter width/ATT/preamp. Store = capture the
+# rig's current live state; Recall = write those settings back over CAT.
+@app.get("/api/memories")
+async def get_memories():
+    return [m.to_dict() for m in memories]
+
+
+class MemStoreReq(BaseModel):
+    name: str
+
+@app.post("/api/memories/store")
+async def store_memory(req: MemStoreReq):
+    s = rig.state
+    ch = MemoryChannel(
+        name=req.name.strip() or f"Ch {len(memories) + 1}",
+        freq=s.freq_a, mode=s.mode, power=s.power,
+        sh=s.sh, att=s.att, preamp=s.preamp,
+    )
+    memories.append(ch)
+    save_memories(memories)
+    return {"ok": True, "memories": [m.to_dict() for m in memories]}
+
+
+@app.post("/api/memories/recall/{idx}")
+async def recall_memory(idx: int):
+    if idx < 0 or idx >= len(memories):
+        return {"ok": False, "error": "index out of range"}
+    ch = memories[idx]
+    # Mode first — filter-width codes are clamped against the *current* mode.
+    rig.set_mode(ch.mode)
+    rig.set_freq(ch.freq)
+    rig.set_power(ch.power)
+    rig.set_sh(ch.sh)
+    rig.set_att(ch.att)
+    rig.set_preamp(ch.preamp)
+    _broadcast()
+    return {"ok": True}
+
+
+@app.post("/api/memories/delete/{idx}")
+async def delete_memory(idx: int):
+    if idx < 0 or idx >= len(memories):
+        return {"ok": False, "error": "index out of range"}
+    memories.pop(idx)
+    save_memories(memories)
+    return {"ok": True, "memories": [m.to_dict() for m in memories]}
+
+
+class MemoriesSaveReq(BaseModel):
+    memories: list[dict]
+
+@app.post("/api/memories/save")
+async def save_memories_endpoint(req: MemoriesSaveReq):
+    """Bulk save after editing fields / reordering in the memory panel."""
+    new_memories = [MemoryChannel.from_dict(d) for d in req.memories]
+    memories[:] = new_memories
+    save_memories(memories)
+    return {"ok": True, "memories": [m.to_dict() for m in memories]}

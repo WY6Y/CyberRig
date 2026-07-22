@@ -1,0 +1,1 @@
+"""CyberRig frequency memory channels."""

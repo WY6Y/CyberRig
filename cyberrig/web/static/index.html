@@ -390,10 +390,13 @@ input[type="range"]::-moz-range-thumb {
   <span class="logo">CYBERRIG</span>
   <span id="conn-dot" title="Connection status"></span>
   <span id="conn-label" style="font-size:13px;font-weight:700;color:var(--green)">DISCONNECTED</span>
-  <input id="port-in" type="text" value="COM3" placeholder="COM port" title="Serial port">
+  <input id="port-in" type="text" value="COM6" placeholder="COM port" title="Serial port">
   <button class="hdr-btn" onclick="doConnect()">CONNECT</button>
   <button class="hdr-btn" onclick="doDisconnect()">DISCONNECT</button>
   <button class="hdr-btn" onclick="openWaterfall()" title="Audio FFT waterfall (separate window)">WATERFALL</button>
+  <button class="hdr-btn" onclick="openEq()" title="Parametric EQ: TX DSP EQ / Mic P-EQ (separate window)">EQ</button>
+  <button class="hdr-btn" onclick="openMacrosEditor()" title="Configure macros: add/edit/delete/reorder (separate window)">MACROS</button>
+  <button class="hdr-btn" onclick="openMemories()" title="Frequency memory channels: store/recall/edit (separate window)">MEMORIES</button>
   <button class="hdr-btn" id="listen-btn" onclick="toggleLanAudio()"
           title="Stream FTDX10 RX audio over Tailscale/LAN">🎧 LISTEN</button>
   <button class="hdr-btn" id="txarm-btn" onclick="toggleRemoteTxArm()"
@@ -677,6 +680,7 @@ input[type="range"]::-moz-range-thumb {
       <button class="tgl" onclick="api('/api/rit_up')" title="+100 Hz">▶</button>
     </div>
   </div>
+
 
 </div><!-- #ctrl-grid -->
 
@@ -1513,6 +1517,27 @@ function openWaterfall() {
   const h = Math.min(700, screen.availHeight - 80);
   window.open('/waterfall', 'cyberrig-waterfall',
     `width=${w},height=${h},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=no`);
+}
+
+function openEq() {
+  const w = Math.min(560, screen.availWidth - 40);
+  const h = Math.min(760, screen.availHeight - 80);
+  window.open('/eq', 'cyberrig-eq',
+    `width=${w},height=${h},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
+}
+
+function openMacrosEditor() {
+  const w = Math.min(700, screen.availWidth - 40);
+  const h = Math.min(800, screen.availHeight - 80);
+  window.open('/macros-editor', 'cyberrig-macros',
+    `width=${w},height=${h},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
+}
+
+function openMemories() {
+  const w = Math.min(700, screen.availWidth - 40);
+  const h = Math.min(800, screen.availHeight - 80);
+  window.open('/memories', 'cyberrig-memories',
+    `width=${w},height=${h},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
 }
 
 // LAN RX audio (FTDX10 USB → WebSocket PCM → Web Audio)

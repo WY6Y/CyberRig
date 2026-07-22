@@ -18,9 +18,9 @@ def _config_dir() -> Path:
 
 
 DEFAULTS = {
-    "cat_port":        "COM3",
+    "cat_port":        "COM6",
     "cat_baud":        38400,
-    "poll_interval":   0.3,
+    "poll_interval":   0.15,
     "rigctl_port":     4532,
     "rigctl_enabled":  True,
     "ws_port":         4533,

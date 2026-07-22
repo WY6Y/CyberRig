@@ -83,6 +83,7 @@ input[type=range] { accent-color: #33ff99; vertical-align: middle; }
 <body>
 
 <div id="bar">
+  <button onclick="backToMain()" title="Back to main CyberRig screen">← BACK</button>
   <span class="logo">CYBERRIG · WATERFALL</span>
   <span class="sep">|</span>
   <label>Audio</label>
@@ -130,6 +131,14 @@ input[type=range] { accent-color: #33ff99; vertical-align: middle; }
 <script src="/static/lan-audio.js"></script>
 <script>
 const HISTORY = 280;
+
+// Always navigate this window/tab back to the main screen. On desktop this
+// popup was opened via window.open(); on iOS (no real popup windows —
+// window.open just navigates in-place with no window chrome/back button)
+// this is the only way back, so it must work unconditionally, not rely on
+// window.close()/window.opener which iOS Safari won't reliably honor.
+function backToMain() { location.href = '/'; }
+
 const lanAudio = new LanAudioPlayer();
 lanAudio.onStatus((msg, cls) => {
   // keep waterfall status for spectrum; show listen on button
