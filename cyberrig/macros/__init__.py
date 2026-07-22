@@ -1,0 +1,1 @@
+"""CyberRig macro system."""

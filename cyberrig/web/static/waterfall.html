@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CyberRig — Waterfall</title>
+<meta name="theme-color" content="#0b140b">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #060b06; --panel: #0b140b; --border: #2a5a2a;
+  --green: #33ff99; --gdim: #66cc88; --gbright: #66ff66;
+  --orange: #ffaa33; --red: #ff4444; --blue: #44bbff;
+}
+html, body {
+  height: 100%; background: var(--bg); color: var(--green);
+  font-family: Consolas, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+  font-size: 14px; font-weight: 600;
+}
+body { display: flex; flex-direction: column; min-height: 100vh; }
+
+#bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 8px 12px; background: #050c05; border-bottom: 1px solid var(--border);
+}
+.logo { font-weight: 800; font-size: 16px; color: var(--gbright); letter-spacing: 2px; }
+.sep { color: var(--border); }
+label { font-size: 12px; color: var(--gdim); font-weight: 700; }
+select, button {
+  font-family: inherit; font-weight: 700; font-size: 12px;
+  background: var(--panel); color: var(--green); border: 1px solid var(--border);
+  padding: 5px 10px; cursor: pointer;
+}
+select { max-width: 280px; }
+button:hover { border-color: var(--gbright); color: var(--gbright); }
+button.on { background: #004422; border-color: var(--gbright); color: var(--gbright); }
+button.danger { border-color: #553333; color: var(--red); }
+button.listen-on { background: #003355; border-color: var(--blue); color: var(--blue); }
+input[type=range] { accent-color: #33ff99; vertical-align: middle; }
+#status { font-size: 12px; color: var(--gdim); margin-left: auto; }
+#status.live { color: var(--gbright); }
+#status.err { color: var(--orange); }
+
+#meta {
+  display: flex; gap: 16px; flex-wrap: wrap; padding: 6px 12px;
+  border-bottom: 1px solid var(--border); background: var(--panel);
+  font-size: 13px; font-weight: 700;
+}
+#meta b { color: var(--gbright); }
+
+#canvas-wrap {
+  flex: 1; position: relative; min-height: 200px;
+  background: #020502; cursor: crosshair;
+}
+#wf {
+  display: block; width: 100%; height: 100%;
+  image-rendering: pixelated;
+}
+#axis {
+  height: 28px; background: #050c05; border-top: 1px solid var(--border);
+  position: relative; font-size: 11px; color: var(--gdim); font-weight: 700;
+}
+#axis span {
+  position: absolute; transform: translateX(-50%); top: 6px; white-space: nowrap;
+}
+#hint {
+  position: absolute; left: 12px; top: 10px; z-index: 2;
+  font-size: 12px; color: var(--orange); font-weight: 700;
+  text-shadow: 0 0 6px #000; pointer-events: none;
+}
+#cross {
+  position: absolute; top: 0; bottom: 0; width: 1px; background: #ffffff66;
+  pointer-events: none; display: none; z-index: 1;
+}
+#cross-lbl {
+  position: absolute; top: 8px; transform: translateX(6px);
+  background: #000c; color: var(--gbright); font-size: 12px; font-weight: 800;
+  padding: 2px 6px; border: 1px solid var(--border); white-space: nowrap;
+}
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <span class="logo">CYBERRIG · WATERFALL</span>
+  <span class="sep">|</span>
+  <label>Audio</label>
+  <select id="dev"></select>
+  <button id="btn-start" onclick="doStart()">▶ Start</button>
+  <button id="btn-stop" class="danger" onclick="doStop()">■ Stop</button>
+  <button id="btn-listen" onclick="toggleListen()">🎧 Listen</button>
+  <label>Vol</label>
+  <input id="vol" type="range" min="5" max="300" value="100" style="width:90px"
+         oninput="setListenVol(+this.value/100)">
+  <label>Floor</label>
+  <select id="floor">
+    <option value="-110">-110</option>
+    <option value="-100">-100</option>
+    <option value="-90" selected>-90</option>
+    <option value="-80">-80</option>
+    <option value="-70">-70</option>
+  </select>
+  <label>Ceil</label>
+  <select id="ceil">
+    <option value="-40">-40</option>
+    <option value="-30">-30</option>
+    <option value="-20" selected>-20</option>
+    <option value="-10">-10</option>
+    <option value="0">0</option>
+  </select>
+  <button onclick="applyRange()">Apply range</button>
+  <span id="status">Connecting…</span>
+</div>
+
+<div id="meta">
+  <span>VFO <b id="vfo">—</b></span>
+  <span>MODE <b id="mode">—</b></span>
+  <span>DEVICE <b id="devname">—</b></span>
+  <span>CLICK = QSY to that audio offset</span>
+</div>
+
+<div id="canvas-wrap">
+  <div id="hint">Select FTDX10 USB audio and press Start</div>
+  <div id="cross"><div id="cross-lbl"></div></div>
+  <canvas id="wf"></canvas>
+</div>
+<div id="axis"></div>
+
+<script src="/static/lan-audio.js"></script>
+<script>
+const HISTORY = 280;
+const lanAudio = new LanAudioPlayer();
+lanAudio.onStatus((msg, cls) => {
+  // keep waterfall status for spectrum; show listen on button
+  const b = document.getElementById('btn-listen');
+  if (b) {
+    b.classList.toggle('listen-on', lanAudio.isPlaying);
+    b.textContent = lanAudio.isPlaying ? '🎧 Listening' : '🎧 Listen';
+  }
+  if (cls === 'err') setStatus(msg, 'err');
+});
+function toggleListen() { lanAudio.toggle(); }
+function setListenVol(g) { lanAudio.setGain(g); }
+const COLORMAP = buildColormap();
+let ws = null;
+let nBins = 512;
+let sampleRate = 12000;
+let vfo = 0;
+let mode = 'USB';
+let running = false;
+let img; // ImageData buffer rows
+let rowPtr = 0; // next write row (scroll by shifting)
+const canvas = document.getElementById('wf');
+const ctx = canvas.getContext('2d', { alpha: false });
+const wrap = document.getElementById('canvas-wrap');
+const hint = document.getElementById('hint');
+const statusEl = document.getElementById('status');
+const cross = document.getElementById('cross');
+const crossLbl = document.getElementById('cross-lbl');
+
+function buildColormap() {
+  // black → blue → cyan → green → yellow → red
+  const stops = [
+    [0.00, [0, 0, 20]],
+    [0.25, [0, 0, 180]],
+    [0.50, [0, 200, 200]],
+    [0.70, [0, 220, 0]],
+    [0.85, [240, 220, 0]],
+    [1.00, [255, 50, 0]],
+  ];
+  const cmap = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    for (let j = 0; j < stops.length - 1; j++) {
+      const [t0, c0] = stops[j], [t1, c1] = stops[j + 1];
+      if (t >= t0 && t <= t1) {
+        const f = (t - t0) / (t1 - t0 || 1);
+        cmap[i*3]   = (c0[0] + f * (c1[0] - c0[0])) | 0;
+        cmap[i*3+1] = (c0[1] + f * (c1[1] - c0[1])) | 0;
+        cmap[i*3+2] = (c0[2] + f * (c1[2] - c0[2])) | 0;
+        break;
+      }
+    }
+  }
+  return cmap;
+}
+
+function setStatus(text, cls) {
+  statusEl.textContent = text;
+  statusEl.className = cls || '';
+}
+
+function formatFreq(hz) {
+  if (!hz) return '—';
+  const M = Math.floor(hz / 1e6);
+  const k = Math.floor((hz % 1e6) / 1e3);
+  const h = hz % 1000;
+  return `${M}.${String(k).padStart(3,'0')}.${String(h).padStart(3,'0')}`;
+}
+
+function resize() {
+  const w = wrap.clientWidth;
+  const h = wrap.clientHeight;
+  if (w < 2 || h < 2) return;
+  canvas.width = w;
+  canvas.height = h;
+  // Re-init scroll buffer at display width × HISTORY
+  img = ctx.createImageData(nBins, HISTORY);
+  // fill dark
+  for (let i = 0; i < img.data.length; i += 4) {
+    img.data[i] = 2; img.data[i+1] = 5; img.data[i+2] = 2; img.data[i+3] = 255;
+  }
+  rowPtr = 0;
+  drawAxis();
+  paint();
+}
+
+function drawAxis() {
+  const axis = document.getElementById('axis');
+  axis.innerHTML = '';
+  const maxHz = sampleRate / 2;
+  const w = axis.clientWidth || wrap.clientWidth;
+  for (let khz = 0; khz <= maxHz / 1000; khz++) {
+    const sp = document.createElement('span');
+    const x = (khz * 1000 / maxHz) * w;
+    sp.style.left = x + 'px';
+    sp.textContent = khz + ' kHz';
+    axis.appendChild(sp);
+  }
+}
+
+function addRow(bins) {
+  if (!img) return;
+  nBins = bins.length;
+  // If buffer width mismatch, rebuild
+  if (img.width !== nBins) {
+    img = ctx.createImageData(nBins, HISTORY);
+    for (let i = 0; i < img.data.length; i += 4) {
+      img.data[i] = 2; img.data[i+1] = 5; img.data[i+2] = 2; img.data[i+3] = 255;
+    }
+    rowPtr = 0;
+  }
+  // Scroll up: move all rows up by 1
+  const rowBytes = nBins * 4;
+  img.data.copyWithin(0, rowBytes);
+  const base = (HISTORY - 1) * rowBytes;
+  for (let x = 0; x < nBins; x++) {
+    const v = bins[x] & 255;
+    const ci = v * 3;
+    const o = base + x * 4;
+    img.data[o]     = COLORMAP[ci];
+    img.data[o + 1] = COLORMAP[ci + 1];
+    img.data[o + 2] = COLORMAP[ci + 2];
+    img.data[o + 3] = 255;
+  }
+  paint();
+}
+
+function paint() {
+  if (!img) return;
+  // Draw offscreen then scale to canvas
+  const off = document.createElement('canvas');
+  off.width = nBins;
+  off.height = HISTORY;
+  off.getContext('2d').putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+}
+
+function populateDevices(devices, autoIndex) {
+  const sel = document.getElementById('dev');
+  sel.innerHTML = '';
+  const opt0 = document.createElement('option');
+  opt0.value = '';
+  opt0.textContent = 'Auto / default';
+  sel.appendChild(opt0);
+  let pick = '';
+  devices.forEach(d => {
+    const o = document.createElement('option');
+    o.value = d.index;
+    const ha = d.hostapi ? ` [${d.hostapi}]` : '';
+    o.textContent = `${d.index}: ${d.name}${ha}`;
+    sel.appendChild(o);
+    const n = (d.name || '').toUpperCase();
+    if (autoIndex != null && d.index === autoIndex) pick = String(d.index);
+    else if (!pick && (n.includes('YAESU') || n.includes('FTDX') || n.includes('USB AUDIO')))
+      pick = String(d.index);
+  });
+  if (pick !== '') sel.value = pick;
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws/waterfall`);
+  ws.onopen = () => setStatus('Connected — press Start', '');
+  ws.onclose = () => {
+    setStatus('Disconnected — retrying…', 'err');
+    running = false;
+    setTimeout(connectWS, 2000);
+  };
+  ws.onerror = () => setStatus('WebSocket error', 'err');
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === 'hello') {
+      populateDevices(msg.devices || [], msg.status && msg.status.running ? msg.status.device_index : null);
+      // Prefer auto from API list
+      fetch('/api/waterfall/devices').then(r => r.json()).then(j => {
+        populateDevices(j.devices || [], j.auto_index);
+        if (j.status && j.status.running) {
+          running = true;
+          setStatus('LIVE · ' + (j.status.device_name || 'audio'), 'live');
+          hint.style.display = 'none';
+          document.getElementById('devname').textContent = j.status.device_name || '—';
+        }
+      }).catch(() => {});
+      if (msg.vfo) { vfo = msg.vfo; document.getElementById('vfo').textContent = formatFreq(vfo); }
+      if (msg.mode) { mode = msg.mode; document.getElementById('mode').textContent = mode; }
+      if (msg.status) {
+        sampleRate = msg.status.sample_rate || sampleRate;
+        nBins = msg.status.out_bins || nBins;
+        drawAxis();
+      }
+    } else if (msg.type === 'row') {
+      if (msg.vfo) { vfo = msg.vfo; document.getElementById('vfo').textContent = formatFreq(vfo); }
+      if (msg.mode) { mode = msg.mode; document.getElementById('mode').textContent = mode; }
+      if (msg.sr) sampleRate = msg.sr;
+      if (msg.bins) {
+        running = true;
+        hint.style.display = 'none';
+        addRow(msg.bins);
+      }
+    } else if (msg.type === 'status') {
+      if (msg.ok === false) {
+        setStatus(msg.error || 'Start failed', 'err');
+        hint.textContent = msg.error || 'Start failed — pick the FTDX10 USB device';
+        hint.style.display = 'block';
+        running = false;
+      } else if (msg.running) {
+        setStatus('LIVE · ' + (msg.device_name || 'audio'), 'live');
+        document.getElementById('devname').textContent = msg.device_name || '—';
+        hint.style.display = 'none';
+        running = true;
+      } else {
+        setStatus('Stopped', '');
+        running = false;
+      }
+    } else if (msg.type === 'qsy' && msg.ok) {
+      vfo = msg.freq;
+      document.getElementById('vfo').textContent = formatFreq(vfo);
+    }
+  };
+}
+
+function doStart() {
+  if (!ws || ws.readyState !== 1) return;
+  const v = document.getElementById('dev').value;
+  const body = { type: 'start' };
+  if (v !== '') body.device_index = +v;
+  setStatus('Starting…', '');
+  ws.send(JSON.stringify(body));
+  applyRange();
+}
+
+function doStop() {
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: 'stop' }));
+  setStatus('Stopped', '');
+  running = false;
+}
+
+function applyRange() {
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({
+    type: 'range',
+    db_min: +document.getElementById('floor').value,
+    db_max: +document.getElementById('ceil').value,
+  }));
+}
+
+// Click → QSY
+canvas.addEventListener('click', (e) => {
+  if (!ws || ws.readyState !== 1) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width;
+  const offsetHz = Math.round(x * (sampleRate / 2));
+  ws.send(JSON.stringify({ type: 'qsy', offset_hz: offsetHz }));
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const frac = x / rect.width;
+  const offsetHz = Math.round(frac * (sampleRate / 2));
+  cross.style.display = 'block';
+  cross.style.left = x + 'px';
+  let abs = vfo + offsetHz;
+  const m = (mode || '').toUpperCase();
+  if (['LSB','CW-L','RTTY-L','DATA-L'].includes(m)) abs = vfo - offsetHz;
+  crossLbl.textContent = `+${offsetHz} Hz → ${formatFreq(abs)}`;
+});
+canvas.addEventListener('mouseleave', () => { cross.style.display = 'none'; });
+
+window.addEventListener('resize', () => { resize(); });
+resize();
+connectWS();
+
+// Auto-start after hello devices load
+setTimeout(() => {
+  // gentle auto-start if not already running
+  if (!running && ws && ws.readyState === 1) doStart();
+}, 800);
+</script>
+</body>
+</html>

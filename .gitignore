@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime / local config (never commit)
+*.log
+*.err
+.cyberrig/
+CyberRig/
+settings.json
+macros.json
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Private station notes (local only — not for public tree)
+HANDOFF.md
+CLAUDE.md
+AGENTS.md
+*.local.md
+
+# Audio / capture junk if ever dropped in tree
+*.wav
+*.raw
+*.pcm
