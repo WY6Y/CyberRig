@@ -5,7 +5,7 @@
 CyberRig is a self-hosted web app that talks to the radio over CAT (USB serial) and
 gives you a full control surface in any modern browser: VFO, mode, meters, filters,
 RX/TX options, macros, and more. It is meant as an open, hackable alternative to
-closed desktop controllers such as Win4Yaesu.
+closed desktop controllers.
 
 > **Status: active development (WIP)**  
 > CyberRig is usable on a real FTDX10 in the shack, but it is **not a finished
