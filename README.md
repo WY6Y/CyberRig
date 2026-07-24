@@ -26,13 +26,15 @@ closed desktop controllers.
 | **Meters** | S-meter; on TX: PO (calibratable), ALC, SWR |
 | **Internal ATU** | Built-in FTDX10 tuner: **ATU** on/off + **TUNE** start/abort (CAT `AC`) |
 | **REMOTE TUNE** | Carrier for an *external* auto-tuner (e.g. MFJ) — separate from internal ATU |
-| **Waterfall** | Separate window: USB-audio FFT + click-to-QSY |
+| **Waterfall** | Separate window. Two source options: (1) an **RTL-SDR panadapter** — wideband, up to ~2.4 MHz span, fed by any `rtl_tcp` server — see the ⚠️ **experimental** note below; (2) the original narrowband USB-audio FFT + click-to-QSY, still available via **🎧 LISTEN** |
+| **Radio power** | Header **⏻ RADIO** toggle — turns the FTDX10's main power on/off over CAT (`PS`), independent of CyberRig's own serial connection |
 | **LAN / VPN audio** | Optional RX listen stream; experimental remote mic TX |
-| **rigctld** | Hamlib-compatible TCP on port **4532** for WSJT-X, fldigi, N1MM, etc. |
+| **rigctld** | Hamlib-compatible TCP on port **4532** for WSJT-X, fldigi, VarAC, N1MM, etc. |
 | **Parametric EQ** | TX DSP EQ + Mic P-EQ, 3 bands each (CAT `EX 03 03`) — separate window |
 | **Macros** | JSON step sequences with `$CALL` / frequency substitution, plus a full add/edit/delete/reorder editor — separate window |
-| **Memory channels** | Snapshot freq/mode/power/filter width/ATT/preamp as a named slot; one-tap recall; edit saved slots afterward — separate window |
+| **Memory channels** | Snapshot freq/mode/power/filter width/ATT/preamp as a named slot; one-tap recall; edit saved slots afterward — separate window. The main control panel also has a **6-slot quick-recall bar** below the BAND row (tap = recall, hold ~0.6s = store) mirroring the first 6 saved channels |
 | **PWA** | Installable shell (icons + service worker; live API never cached) |
+| **Native desktop window** | `native.py` opens the same server in a real window (pywebview) instead of a browser tab, for the PC physically connected to the radio |
 
 Legacy PySide6 desktop code lives under `cyberrig/ui_legacy/` and is **not** the
 primary path anymore.
@@ -128,6 +130,11 @@ CyberRig/
 | `tune_timeout_sec` | `90` | Auto-stop safety for REMOTE TUNE |
 | `po_max_watts` | `100` | Full-scale assumption for PO bar |
 | `po_cal` | `0.67` | Scale factor — calibrate with a real wattmeter |
+| `rtl_host` | *(empty)* | **Experimental.** Hostname/IP of an `rtl_tcp` server for the RTL-SDR panadapter. Leave blank to skip it — the app works fine without one |
+| `rtl_port` | `1234` | `rtl_tcp` port |
+| `rtl_sample_rate` | `2048000` | Panadapter capture rate (Hz); the UI's Span dropdown can zoom in narrower than this in software |
+| `rtl_center_hz` | `7150000` | Fallback panadapter center frequency before the rig reports a VFO |
+| `cybersdr_api_url` | *(empty)* | Optional. Only needed if you share the same RTL-SDR dongle with a separate WSPR-style decoder exposing a `/api/decoder/{stop,start}` pause/resume REST API — leave blank otherwise |
 
 ---
 
@@ -158,16 +165,28 @@ Hamlib command lists are correct for this radio:
 - Remote SSB mic TX is **experimental** — latency, ALC, and USB MOD path settings
   still need care. Close Win4Yaesu (or anything else holding the CAT COM port)
   before starting CyberRig.
+- **The RTL-SDR panadapter is highly experimental — use at your own risk/hassle.**
+  It depends on a separate RTL-SDR dongle and `rtl_tcp` running somewhere on your
+  network (not the radio's own CAT/audio path), needs its own gain/span tuning per
+  band and per dongle, and the dB scale is calibrated against one specific setup —
+  don't expect it to "just work" out of the box. It has no effect on core CAT/meter/
+  audio functionality if you never configure `rtl_host` (default: blank/off). If it
+  misbehaves, that's expected territory right now, not necessarily a bug — the
+  narrowband USB-audio waterfall (**🎧 LISTEN**) is the stable fallback.
 
 ---
 
 ## Development status
 
 **Working well enough for shack use (as of mid‑2026):** CAT control, live meters,
-front-panel setting sync, REMOTE TUNE, waterfall, LAN RX listen, PWA shell, first
-live QSOs from the web path.
+front-panel setting sync, REMOTE TUNE, internal ATU/TUNE, radio power toggle,
+narrowband waterfall, LAN RX listen, memory channels + quick-recall bar, macros,
+parametric EQ, rigctld (confirmed working with VarAC), PWA shell, first live QSOs
+from the web path.
 
-**Still cooking:** remote mic TX polish, bulletproof Windows autostart, packaging,
+**Still cooking:** remote mic TX polish, the RTL-SDR panadapter (functional but
+genuinely experimental — see Safety), bulletproof Windows autostart, the native
+desktop window (`native.py`, works but only lightly burn-in tested), packaging,
 broader documentation, and general hardening for third-party stations.
 
 If something breaks on your radio or OS, open an issue with: OS, Python version,

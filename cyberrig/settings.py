@@ -36,6 +36,19 @@ DEFAULTS = {
     # naive raw/255*100 often over-reads on SSB/USB-audio TX.
     "po_max_watts":    100,
     "po_cal":          0.67,
+    # RTL-SDR panadapter — EXPERIMENTAL, use at your own risk/hassle (see README).
+    # Points at any rtl_tcp server (rtl_tcp -a <host>); set your own host/port
+    # in settings.json, not here. Optionally shares the dongle with a CyberSDR-style
+    # decoder via a REST pause/resume API at cybersdr_api_url — leave that blank
+    # if you don't have one.
+    "rtl_host":        "",               # e.g. "192.168.1.50" — set in settings.json
+    "rtl_port":        1234,
+    "rtl_sample_rate": 2048000,          # 2.048 Msps default — wide enough to actually spot signals
+                                          # (~2 MHz visible) at modest LAN bandwidth (~33 Mbit/s raw);
+                                          # FFT is throttled so CPU cost doesn't scale with this.
+                                          # UI span selector can override per-session.
+    "rtl_center_hz":   7150000,          # fallback center if used before the rig reports a VFO
+    "cybersdr_api_url": "",              # optional; blank = no external decoder to pause/resume
 }
 
 

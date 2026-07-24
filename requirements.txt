@@ -5,4 +5,7 @@ websockets>=12.0
 # Waterfall (FTDX10 USB audio FFT on the shack PC)
 numpy>=1.24.0
 sounddevice>=0.4.6
+# Native window wrapper (native.py) — same server/UI, just no browser chrome.
+# Uses Edge WebView2 on Windows (already present on Win10 2004+/Win11).
+pywebview>=5.0
 # PySide6>=6.6.0   <- ui_legacy only, not needed for web server

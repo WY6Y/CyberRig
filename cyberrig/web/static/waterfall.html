@@ -41,6 +41,10 @@ input[type=range] { accent-color: #33ff99; vertical-align: middle; }
 #status { font-size: 12px; color: var(--gdim); margin-left: auto; }
 #status.live { color: var(--gbright); }
 #status.err { color: var(--orange); }
+#exp-badge {
+  font-size: 10px; font-weight: 800; color: var(--orange); border: 1px solid var(--orange);
+  padding: 2px 6px; letter-spacing: 1px; border-radius: 2px;
+}
 
 #meta {
   display: flex; gap: 16px; flex-wrap: wrap; padding: 6px 12px;
@@ -78,6 +82,10 @@ input[type=range] { accent-color: #33ff99; vertical-align: middle; }
   background: #000c; color: var(--gbright); font-size: 12px; font-weight: 800;
   padding: 2px 6px; border: 1px solid var(--border); white-space: nowrap;
 }
+#vfoline {
+  position: absolute; top: 0; bottom: 0; width: 2px; background: var(--orange);
+  pointer-events: none; z-index: 1; display: none; box-shadow: 0 0 6px var(--orange);
+}
 </style>
 </head>
 <body>
@@ -85,9 +93,31 @@ input[type=range] { accent-color: #33ff99; vertical-align: middle; }
 <div id="bar">
   <button onclick="backToMain()" title="Back to main CyberRig screen">← BACK</button>
   <span class="logo">CYBERRIG · WATERFALL</span>
+  <span id="exp-badge" title="RTL-SDR panadapter mode is experimental: needs its own gain/dB tuning per dongle and band, and depends on a separate rtl_tcp server. The Audio FFT source (LISTEN) is the stable fallback.">EXPERIMENTAL — RTL MODE</span>
   <span class="sep">|</span>
-  <label>Audio</label>
-  <select id="dev"></select>
+  <label>Span</label>
+  <select id="span" onchange="onSpanChange()">
+    <option value="10000">10 kHz (nitty-gritty)</option>
+    <option value="50000">50 kHz</option>
+    <option value="150000">150 kHz</option>
+    <option value="250000">250 kHz (zoom)</option>
+    <option value="512000">512 kHz</option>
+    <option value="1024000">1.024 MHz</option>
+    <option value="1536000">1.536 MHz</option>
+    <option value="2048000" selected>2.048 MHz</option>
+    <option value="2400000">2.4 MHz (wide)</option>
+  </select>
+  <label>Speed</label>
+  <select id="speed" onchange="applySpeed()">
+    <option value="1">1/sec (slow)</option>
+    <option value="2">2/sec</option>
+    <option value="4">4/sec</option>
+    <option value="6" selected>6/sec (default)</option>
+    <option value="10">10/sec</option>
+    <option value="15">15/sec</option>
+    <option value="20">20/sec</option>
+    <option value="30">30/sec (fast)</option>
+  </select>
   <button id="btn-start" onclick="doStart()">▶ Start</button>
   <button id="btn-stop" class="danger" onclick="doStop()">■ Stop</button>
   <button id="btn-listen" onclick="toggleListen()">🎧 Listen</button>
@@ -95,21 +125,9 @@ input[type=range] { accent-color: #33ff99; vertical-align: middle; }
   <input id="vol" type="range" min="5" max="300" value="100" style="width:90px"
          oninput="setListenVol(+this.value/100)">
   <label>Floor</label>
-  <select id="floor">
-    <option value="-110">-110</option>
-    <option value="-100">-100</option>
-    <option value="-90" selected>-90</option>
-    <option value="-80">-80</option>
-    <option value="-70">-70</option>
-  </select>
+  <input id="floor" type="number" step="1" value="5" style="width:60px">
   <label>Ceil</label>
-  <select id="ceil">
-    <option value="-40">-40</option>
-    <option value="-30">-30</option>
-    <option value="-20" selected>-20</option>
-    <option value="-10">-10</option>
-    <option value="0">0</option>
-  </select>
+  <input id="ceil" type="number" step="1" value="55" style="width:60px">
   <button onclick="applyRange()">Apply range</button>
   <span id="status">Connecting…</span>
 </div>
@@ -118,12 +136,13 @@ input[type=range] { accent-color: #33ff99; vertical-align: middle; }
   <span>VFO <b id="vfo">—</b></span>
   <span>MODE <b id="mode">—</b></span>
   <span>DEVICE <b id="devname">—</b></span>
-  <span>CLICK = QSY to that audio offset</span>
+  <span id="clickhint">CLICK = QSY to that frequency</span>
 </div>
 
 <div id="canvas-wrap">
-  <div id="hint">Select FTDX10 USB audio and press Start</div>
+  <div id="hint">Starting RTL Panadapter…</div>
   <div id="cross"><div id="cross-lbl"></div></div>
+  <div id="vfoline"></div>
   <canvas id="wf"></canvas>
 </div>
 <div id="axis"></div>
@@ -158,6 +177,8 @@ let sampleRate = 12000;
 let vfo = 0;
 let mode = 'USB';
 let running = false;
+const source = 'rtl';       // always RTL — the Yaesu audio-FFT waterfall view was removed from this UI (2026-07-22); the Listen/PCM audio path is unaffected
+let centerHz = 0;           // RTL panadapter center frequency (two-sided IQ span)
 let img; // ImageData buffer rows
 let rowPtr = 0; // next write row (scroll by shifting)
 const canvas = document.getElementById('wf');
@@ -167,6 +188,8 @@ const hint = document.getElementById('hint');
 const statusEl = document.getElementById('status');
 const cross = document.getElementById('cross');
 const crossLbl = document.getElementById('cross-lbl');
+const vfoLine = document.getElementById('vfoline');
+const clickHint = document.getElementById('clickhint');
 
 function buildColormap() {
   // black → blue → cyan → green → yellow → red
@@ -222,21 +245,59 @@ function resize() {
   }
   rowPtr = 0;
   drawAxis();
+  updateVfoLine();
   paint();
+}
+
+function niceStepKHz(rough) {
+  const steps = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
+  for (const s of steps) if (rough <= s) return s;
+  return 1000;
 }
 
 function drawAxis() {
   const axis = document.getElementById('axis');
   axis.innerHTML = '';
-  const maxHz = sampleRate / 2;
   const w = axis.clientWidth || wrap.clientWidth;
-  for (let khz = 0; khz <= maxHz / 1000; khz++) {
-    const sp = document.createElement('span');
-    const x = (khz * 1000 / maxHz) * w;
-    sp.style.left = x + 'px';
-    sp.textContent = khz + ' kHz';
-    axis.appendChild(sp);
+  if (source === 'rtl') {
+    // Two-sided IQ spectrum centered on centerHz, not baseband 0..sr/2
+    const half = sampleRate / 2;
+    const lo = centerHz - half, hi = centerHz + half;
+    const spanKHz = (hi - lo) / 1000;
+    const step = niceStepKHz(spanKHz / 10);
+    const startKHz = Math.ceil(lo / 1000 / step) * step;
+    for (let khz = startKHz; khz * 1000 <= hi; khz += step) {
+      const x = ((khz * 1000 - lo) / (hi - lo)) * w;
+      const sp = document.createElement('span');
+      sp.style.left = x + 'px';
+      sp.textContent = khz + ' kHz';
+      axis.appendChild(sp);
+    }
+  } else {
+    const maxHz = sampleRate / 2;
+    for (let khz = 0; khz <= maxHz / 1000; khz++) {
+      const sp = document.createElement('span');
+      const x = (khz * 1000 / maxHz) * w;
+      sp.style.left = x + 'px';
+      sp.textContent = khz + ' kHz';
+      axis.appendChild(sp);
+    }
   }
+}
+
+function updateVfoLine() {
+  if (source !== 'rtl' || !centerHz || !sampleRate) {
+    vfoLine.style.display = 'none';
+    return;
+  }
+  const half = sampleRate / 2;
+  const frac = (vfo - (centerHz - half)) / (2 * half);
+  if (!vfo || frac < 0 || frac > 1) {
+    vfoLine.style.display = 'none';
+    return;
+  }
+  vfoLine.style.display = 'block';
+  vfoLine.style.left = (frac * 100) + '%';
 }
 
 function addRow(bins) {
@@ -277,28 +338,6 @@ function paint() {
   ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
 }
 
-function populateDevices(devices, autoIndex) {
-  const sel = document.getElementById('dev');
-  sel.innerHTML = '';
-  const opt0 = document.createElement('option');
-  opt0.value = '';
-  opt0.textContent = 'Auto / default';
-  sel.appendChild(opt0);
-  let pick = '';
-  devices.forEach(d => {
-    const o = document.createElement('option');
-    o.value = d.index;
-    const ha = d.hostapi ? ` [${d.hostapi}]` : '';
-    o.textContent = `${d.index}: ${d.name}${ha}`;
-    sel.appendChild(o);
-    const n = (d.name || '').toUpperCase();
-    if (autoIndex != null && d.index === autoIndex) pick = String(d.index);
-    else if (!pick && (n.includes('YAESU') || n.includes('FTDX') || n.includes('USB AUDIO')))
-      pick = String(d.index);
-  });
-  if (pick !== '') sel.value = pick;
-}
-
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws/waterfall`);
@@ -313,44 +352,65 @@ function connectWS() {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === 'hello') {
-      populateDevices(msg.devices || [], msg.status && msg.status.running ? msg.status.device_index : null);
-      // Prefer auto from API list
-      fetch('/api/waterfall/devices').then(r => r.json()).then(j => {
-        populateDevices(j.devices || [], j.auto_index);
-        if (j.status && j.status.running) {
-          running = true;
-          setStatus('LIVE · ' + (j.status.device_name || 'audio'), 'live');
-          hint.style.display = 'none';
-          document.getElementById('devname').textContent = j.status.device_name || '—';
-        }
-      }).catch(() => {});
       if (msg.vfo) { vfo = msg.vfo; document.getElementById('vfo').textContent = formatFreq(vfo); }
       if (msg.mode) { mode = msg.mode; document.getElementById('mode').textContent = mode; }
-      if (msg.status) {
+      if (msg.rtl_status && msg.rtl_status.running) {
+        // RTL panadapter already live server-side (e.g. page refresh) — reflect it, don't re-issue start
+        centerHz = msg.rtl_status.center_hz || centerHz;
+        sampleRate = msg.rtl_status.sample_rate || sampleRate;
+        nBins = msg.rtl_status.out_bins || nBins;
+        if (msg.rtl_status.db_min != null) document.getElementById('floor').value = msg.rtl_status.db_min;
+        if (msg.rtl_status.db_max != null) document.getElementById('ceil').value = msg.rtl_status.db_max;
+        running = true;
+        setStatus('LIVE · RTL Panadapter', 'live');
+        hint.style.display = 'none';
+        onSourceUiUpdate();
+        drawAxis();
+        updateVfoLine();
+      } else if (msg.status) {
         sampleRate = msg.status.sample_rate || sampleRate;
         nBins = msg.status.out_bins || nBins;
         drawAxis();
       }
     } else if (msg.type === 'row') {
+      // This page only ever shows the RTL panadapter now. Enabling "Listen"
+      // starts the separate Yaesu USB-audio engine purely for its PCM stream —
+      // that engine emits its own (untagged) FFT rows too, which used to get
+      // drawn into this same canvas, overlaying the two waterfalls. Ignore
+      // anything that isn't explicitly tagged from the RTL engine.
+      if ((msg.source || 'audio') !== 'rtl') return;
       if (msg.vfo) { vfo = msg.vfo; document.getElementById('vfo').textContent = formatFreq(vfo); }
       if (msg.mode) { mode = msg.mode; document.getElementById('mode').textContent = mode; }
+      const axisStale = (msg.sr && msg.sr !== sampleRate) || (msg.center_hz && msg.center_hz !== centerHz);
       if (msg.sr) sampleRate = msg.sr;
+      if (msg.center_hz) centerHz = msg.center_hz;
       if (msg.bins) {
         running = true;
         hint.style.display = 'none';
         addRow(msg.bins);
+        if (axisStale) drawAxis();
+        updateVfoLine();
       }
     } else if (msg.type === 'status') {
       if (msg.ok === false) {
         setStatus(msg.error || 'Start failed', 'err');
-        hint.textContent = msg.error || 'Start failed — pick the FTDX10 USB device';
+        hint.textContent = msg.error || (source === 'rtl'
+          ? 'Start failed — is rtl_tcp reachable at the configured rtl_host? (Experimental — see README.)'
+          : 'Start failed — pick the FTDX10 USB device');
         hint.style.display = 'block';
         running = false;
       } else if (msg.running) {
-        setStatus('LIVE · ' + (msg.device_name || 'audio'), 'live');
-        document.getElementById('devname').textContent = msg.device_name || '—';
+        setStatus('LIVE · ' + (source === 'rtl' ? 'RTL Panadapter' : (msg.device_name || 'audio')), 'live');
+        document.getElementById('devname').textContent = source === 'rtl' ? 'RTL rtl_tcp' : (msg.device_name || '—');
         hint.style.display = 'none';
         running = true;
+        if (msg.center_hz) centerHz = msg.center_hz;
+        if (msg.sample_rate) sampleRate = msg.sample_rate;
+        if (msg.db_min != null) document.getElementById('floor').value = msg.db_min;
+        if (msg.db_max != null) document.getElementById('ceil').value = msg.db_max;
+        onSourceUiUpdate();
+        drawAxis();
+        updateVfoLine();
       } else {
         setStatus('Stopped', '');
         running = false;
@@ -362,14 +422,21 @@ function connectWS() {
   };
 }
 
+function onSourceUiUpdate() {
+  clickHint.textContent = 'CLICK = QSY to that frequency';
+}
+
+function onSpanChange() {
+  doStart();  // re-sends with the new sample_rate; server restarts if it actually changed
+}
+
 function doStart() {
   if (!ws || ws.readyState !== 1) return;
-  const v = document.getElementById('dev').value;
-  const body = { type: 'start' };
-  if (v !== '') body.device_index = +v;
+  const body = { type: 'start', source, sample_rate: +document.getElementById('span').value };
   setStatus('Starting…', '');
   ws.send(JSON.stringify(body));
   applyRange();
+  applySpeed();
 }
 
 function doStop() {
@@ -388,36 +455,66 @@ function applyRange() {
   }));
 }
 
+function applySpeed() {
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({
+    type: 'speed',
+    rows_per_sec: +document.getElementById('speed').value,
+  }));
+}
+
 // Click → QSY
 canvas.addEventListener('click', (e) => {
-  if (!ws || ws.readyState !== 1) return;
   const rect = canvas.getBoundingClientRect();
   const x = (e.clientX - rect.left) / rect.width;
-  const offsetHz = Math.round(x * (sampleRate / 2));
-  ws.send(JSON.stringify({ type: 'qsy', offset_hz: offsetHz }));
+  if (source === 'rtl') {
+    const half = sampleRate / 2;
+    const absHz = Math.round((centerHz - half) + x * (2 * half));
+    fetch('/api/freq', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hz: absHz }),
+    }).then(r => r.json()).then(j => {
+      vfo = absHz;
+      document.getElementById('vfo').textContent = formatFreq(vfo);
+      updateVfoLine();
+    }).catch(() => {});
+  } else {
+    if (!ws || ws.readyState !== 1) return;
+    const offsetHz = Math.round(x * (sampleRate / 2));
+    ws.send(JSON.stringify({ type: 'qsy', offset_hz: offsetHz }));
+  }
 });
 
 canvas.addEventListener('mousemove', (e) => {
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const frac = x / rect.width;
-  const offsetHz = Math.round(frac * (sampleRate / 2));
   cross.style.display = 'block';
   cross.style.left = x + 'px';
-  let abs = vfo + offsetHz;
-  const m = (mode || '').toUpperCase();
-  if (['LSB','CW-L','RTTY-L','DATA-L'].includes(m)) abs = vfo - offsetHz;
-  crossLbl.textContent = `+${offsetHz} Hz → ${formatFreq(abs)}`;
+  if (source === 'rtl') {
+    const half = sampleRate / 2;
+    const absHz = Math.round((centerHz - half) + frac * (2 * half));
+    crossLbl.textContent = formatFreq(absHz);
+  } else {
+    const offsetHz = Math.round(frac * (sampleRate / 2));
+    let abs = vfo + offsetHz;
+    const m = (mode || '').toUpperCase();
+    if (['LSB','CW-L','RTTY-L','DATA-L'].includes(m)) abs = vfo - offsetHz;
+    crossLbl.textContent = `+${offsetHz} Hz → ${formatFreq(abs)}`;
+  }
 });
 canvas.addEventListener('mouseleave', () => { cross.style.display = 'none'; });
 
+onSourceUiUpdate();
 window.addEventListener('resize', () => { resize(); });
 resize();
 connectWS();
 
-// Auto-start after hello devices load
+// Auto-start after hello devices load. RTL Panadapter is the default/only
+// waterfall source (see EXPERIMENTAL badge above) — if it shares a dongle
+// with another decoder via cybersdr_api_url, opening this page pauses that
+// decoder for as long as this page stays open.
 setTimeout(() => {
-  // gentle auto-start if not already running
   if (!running && ws && ws.readyState === 1) doStart();
 }, 800);
 </script>

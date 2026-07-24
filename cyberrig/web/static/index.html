@@ -22,6 +22,7 @@
 <style>
 .hdr-btn.active-listen { background: #003355; border-color: var(--blue); color: var(--blue); }
 .hdr-btn.active-txarm { background: #3a2000; border-color: var(--orange); color: var(--orange); }
+.hdr-btn.radio-off { background: #3a0000; border-color: var(--red); color: var(--red); }
 #ptt-btn.remote-armed {
   border-color: var(--orange); box-shadow: 0 0 8px #ff880044;
   user-select: none; -webkit-user-select: none; touch-action: none;
@@ -188,6 +189,28 @@ button, input { font-weight: 700; }
   font-weight: 800; }
 .band-btn.active { background: #002244; color: var(--blue); border-color: var(--blue);
   font-weight: 800; }
+
+/* ─── HYPERMEMORY BAR ────────────────────────────────────────────── */
+#hyper-mem {
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  padding: 8px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+#hyper-mem .btn-group { flex: 1; }
+.hmem-btn {
+  background: var(--bg); color: var(--green); border: 1px solid var(--border);
+  padding: 6px 10px; cursor: pointer; font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; gap: 6px; min-width: 120px;
+  touch-action: none; user-select: none;
+}
+.hmem-btn:hover { border-color: var(--gbright); }
+.hmem-btn.empty { color: var(--gdim); font-style: italic; }
+.hmem-btn .hmem-num {
+  color: var(--gbright); font-weight: 800; background: #002244; border: 1px solid var(--blue);
+  padding: 1px 5px; font-size: 11px;
+}
+.hmem-btn.empty .hmem-num { background: transparent; border-color: var(--border); color: var(--gdim); }
+.hmem-btn .hmem-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+.hmem-btn.flash { background: #004422; border-color: var(--gbright); color: var(--gbright); }
 
 /* ─── MAIN CONTROLS GRID ─────────────────────────────────────────── */
 #ctrl-grid {
@@ -393,6 +416,8 @@ input[type="range"]::-moz-range-thumb {
   <input id="port-in" type="text" value="COM6" placeholder="COM port" title="Serial port">
   <button class="hdr-btn" onclick="doConnect()">CONNECT</button>
   <button class="hdr-btn" onclick="doDisconnect()">DISCONNECT</button>
+  <button class="hdr-btn" id="radio-pwr-btn" onclick="toggleRadioPower()"
+          title="Turn the FTDX10's main power on/off over CAT (PS). CyberRig itself stays connected.">⏻ RADIO</button>
   <button class="hdr-btn" onclick="openWaterfall()" title="Audio FFT waterfall (separate window)">WATERFALL</button>
   <button class="hdr-btn" onclick="openEq()" title="Parametric EQ: TX DSP EQ / Mic P-EQ (separate window)">EQ</button>
   <button class="hdr-btn" onclick="openMacrosEditor()" title="Configure macros: add/edit/delete/reorder (separate window)">MACROS</button>
@@ -463,6 +488,16 @@ input[type="range"]::-moz-range-thumb {
     <div class="btn-group" id="band-btns">
       <!-- filled by JS -->
     </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!--  HYPERMEMORY BAR — 6 quick-recall slots (01-06)                        -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<section id="hyper-mem">
+  <span class="row-label">MEM</span>
+  <div class="btn-group" id="hyper-mem-btns">
+    <!-- filled by JS -->
   </div>
 </section>
 
@@ -757,6 +792,7 @@ let state = {
   vox:false, vox_gain:50, vox_delay:100, monitor:false, mon_level:50,
   cw_speed:20, cw_pitch:600, cw_breakin:false, cw_delay:200,
   antenna:1, locked:false, mic_gain:50, atu:false, atu_tuning:false,
+  radio_on:true,
   macro_running:false
 };
 
@@ -941,6 +977,115 @@ function buildMacroButtons() {
   });
 }
 
+// ── Hypermemory bar — 6 fixed quick-recall slots (01-06) ────────────────
+// Tap = recall. Hold ~0.6s = store current rig state into that slot.
+const HMEM_SLOTS = 6;
+const HMEM_LONG_PRESS_MS = 650;
+let _hmemPtr = null; // { idx, opened, timer }
+let hyperMemories = [];
+
+function buildHyperMemButtons() {
+  const c = document.getElementById('hyper-mem-btns');
+  for (let i = 0; i < HMEM_SLOTS; i++) {
+    const b = document.createElement('button');
+    b.className = 'hmem-btn empty';
+    b.dataset.idx = String(i);
+    b.innerHTML = `<span class="hmem-num">${String(i + 1).padStart(2, '0')}</span>` +
+                   `<span class="hmem-label">— empty —</span>`;
+    b.title = 'Hold ~0.6s to store current rig state here';
+    b.addEventListener('pointerdown', onHMemPointerDown);
+    b.addEventListener('pointerup', onHMemPointerUp);
+    b.addEventListener('pointercancel', onHMemPointerCancel);
+    b.addEventListener('lostpointercapture', onHMemPointerCancel);
+    c.appendChild(b);
+  }
+}
+
+function loadHyperMem() {
+  fetch('/api/memories').then(r => r.json()).then(data => {
+    hyperMemories = data;
+    renderHyperMem();
+  });
+}
+
+function renderHyperMem() {
+  const c = document.getElementById('hyper-mem-btns');
+  if (!c) return;
+  for (let i = 0; i < HMEM_SLOTS; i++) {
+    const btn = c.querySelector(`[data-idx="${i}"]`);
+    if (!btn) continue;
+    const m = hyperMemories[i];
+    const labelEl = btn.querySelector('.hmem-label');
+    if (m) {
+      const mhz = (m.freq / 1e6).toFixed(3);
+      labelEl.textContent = `${m.name} · ${mhz} ${m.mode}`;
+      btn.classList.remove('empty');
+      btn.title = `Tap to recall ${m.name} (${mhz} MHz ${m.mode}) · Hold ~0.6s to overwrite`;
+    } else {
+      labelEl.textContent = '— empty —';
+      btn.classList.add('empty');
+      btn.title = 'Hold ~0.6s to store current rig state here';
+    }
+  }
+}
+
+function _clearHMemPtr() {
+  if (_hmemPtr && _hmemPtr.timer) clearTimeout(_hmemPtr.timer);
+  _hmemPtr = null;
+}
+
+function onHMemPointerDown(e) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  e.preventDefault();
+  const idx = +e.currentTarget.dataset.idx;
+  _clearHMemPtr();
+  _hmemPtr = {
+    idx, opened: false,
+    timer: setTimeout(() => {
+      if (!_hmemPtr) return;
+      _hmemPtr.opened = true;
+      hMemStore(idx);
+    }, HMEM_LONG_PRESS_MS),
+  };
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+}
+
+function onHMemPointerUp(e) {
+  e.preventDefault();
+  const p = _hmemPtr;
+  _clearHMemPtr();
+  if (!p || p.opened) return;
+  hMemRecall(p.idx);
+}
+
+function onHMemPointerCancel() {
+  _clearHMemPtr();
+}
+
+function hMemRecall(idx) {
+  if (!hyperMemories[idx]) return; // empty slot — nothing to recall
+  api(`/api/memories/recall/${idx}`).then(res => {
+    if (!res || !res.ok) return;
+    const btn = document.querySelector(`.hmem-btn[data-idx="${idx}"]`);
+    if (btn) {
+      btn.classList.add('flash');
+      setTimeout(() => btn.classList.remove('flash'), 400);
+    }
+  });
+}
+
+function hMemStore(idx) {
+  const existing = hyperMemories[idx];
+  const defaultName = existing ? existing.name : `CH${String(idx + 1).padStart(2, '0')}`;
+  const name = prompt(`Store current rig state to slot ${String(idx + 1).padStart(2, '0')}?\nName:`, defaultName);
+  if (name === null) return; // cancelled
+  api(`/api/memories/store_slot/${idx}`, {name}).then(res => {
+    if (!res || !res.ok) return;
+    hyperMemories = res.memories;
+    renderHyperMem();
+  });
+}
+
 // ── UI update from state ───────────────────────────────────────────────
 function updateUI() {
   // Connection
@@ -948,6 +1093,13 @@ function updateUI() {
   const lbl = document.getElementById('conn-label');
   dot.className = state.connected ? 'on' : '';
   lbl.textContent = state.connected ? 'CONNECTED' : 'DISCONNECTED';
+
+  // Radio main power (CAT PS) — separate from CyberRig's own connection
+  const pwrBtn = document.getElementById('radio-pwr-btn');
+  if (pwrBtn) {
+    pwrBtn.classList.toggle('radio-off', !state.radio_on);
+    pwrBtn.textContent = state.radio_on ? '⏻ RADIO ON' : '⏻ RADIO OFF';
+  }
 
   // TX indicator
   const txInd = document.getElementById('tx-ind');
@@ -1583,6 +1735,14 @@ async function toggleRemoteTune() {
   }
 }
 
+function toggleRadioPower() {
+  const on = !state.radio_on;
+  if (!on && !confirm('Turn off the radio\'s main power? (CyberRig stays connected — use this button again to power it back on.)')) return;
+  state.radio_on = on;
+  updateUI();
+  api('/api/radio_power', {on});
+}
+
 function toggleATU() {
   const on = !state.atu;
   state.atu = on;
@@ -1696,6 +1856,9 @@ function cwQuick(type) {
 buildModeButtons();
 buildBandButtons();
 buildMacroButtons();
+buildHyperMemButtons();
+loadHyperMem();
+window.addEventListener('focus', loadHyperMem);
 updateUI();
 connectWS();
 

@@ -157,6 +157,8 @@ class RigState:
         # Internal ATU (CAT AC): on/off + tuning cycle (not external REMOTE TUNE)
         self.atu: bool = False
         self.atu_tuning: bool = False
+        # Main rig power (CAT PS) — separate from CyberRig's own CAT connection
+        self.radio_on: bool = True
 
 
 class FTdx10:
@@ -443,6 +445,33 @@ class FTdx10:
         self._set(f"PC{w:03d};")
         self.state.power = w
         self._fire("power_changed", w)
+
+    # ── Main Rig Power (PS) ──────────────────────────────────────────────────
+    # This is the radio's own AC power switch over CAT — separate from
+    # CyberRig's serial connect/disconnect, which just opens/closes COM6.
+
+    def get_radio_power(self) -> Optional[bool]:
+        r = self._cmd("PS;")
+        if r and r.startswith("PS") and len(r) >= 3:
+            return r[2] == "1"
+        return None
+
+    def set_radio_power(self, on: bool):
+        """Turn the rig's main power on/off (CAT PS0/PS1).
+
+        Manual (PS command): powering on requires dummy data be sent first,
+        then the real "PS1;" 1-2s later, or the rig won't wake from standby.
+        The USB CAT interface itself stays alive while the rig is off, so no
+        reconnect/COM-port cycling is needed either direction.
+        """
+        self._set(f"PS{'1' if on else '0'};")
+        if on:
+            def _wake():
+                time.sleep(1.2)
+                self._set("PS1;")
+            threading.Thread(target=_wake, daemon=True, name="ps-wake").start()
+        self.state.radio_on = on
+        self._fire("radio_power_changed", on)
 
     # ── Filter Width (SH, Table 3) ────────────────────────────────────────────
 
@@ -1294,6 +1323,7 @@ class FTdx10:
     def _poll_antenna_cw(self):
         self._assign("antenna", self.get_antenna(), "antenna_changed")
         self._assign("locked", self.get_lock(), "lock_changed")
+        self._assign("radio_on", self.get_radio_power(), "radio_power_changed")
         self._poll_atu()
         cw = self.get_cw_speed()
         bi = self.get_cw_breakin()

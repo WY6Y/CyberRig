@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 
 from cyberrig.audio.tx_audio import tx_engine
 from cyberrig.audio.waterfall import engine as wf_engine
+from cyberrig.audio.rtl_panadapter import engine as rtl_engine
 from cyberrig.cat.ftdx10 import FTdx10, sh_hz
 from cyberrig.macros.engine import MacroRunner
 from cyberrig.macros.model import Macro
@@ -138,6 +140,7 @@ def _state_dict() -> dict:
         "mic_gain": s.mic_gain,
         "atu": s.atu,
         "atu_tuning": s.atu_tuning,
+        "radio_on": s.radio_on,
         "macro_running": runner.is_running() if runner else False,
         "tune_active": _tune_active,
         "tune_watts": int(settings.get("tune_watts", 20)),
@@ -193,6 +196,59 @@ async def _wf_broadcast(payload: dict):
             _wf_clients.remove(ws)
 
 
+def _cybersdr_post(path: str):
+    """Best-effort pause/resume call into CyberSDR's WSPR decoder API.
+
+    CyberSDR itself fails fast with no retry on a dropped rtl_tcp connection,
+    so a missed call here just means WSPR resumes on its own next cycle, or
+    the panadapter proceeds without having freed the dongle first — swallow
+    everything rather than blocking the panadapter start/stop on it.
+    """
+    base = settings.get("cybersdr_api_url", "")
+    if not base:
+        return
+    try:
+        req = urllib.request.Request(base.rstrip("/") + path, data=b"", method="POST")
+        urllib.request.urlopen(req, timeout=2.0)
+    except Exception as e:
+        log.warning("cybersdr %s failed (continuing): %s", path, e)
+
+
+def _maybe_follow_vfo(hz: int):
+    """Soft-follow: only recenter the RTL panadapter when the VFO nears/leaves the
+    edge of the currently displayed span, not on every single freq_changed tick.
+
+    Hard-follow (recenter on every change) was tried first — with the panadapter's
+    span this small relative to how fast CAT polling reports frequency changes
+    while tuning, it made the axis/labels visibly shift on every tick ("constantly
+    changing"). Soft-follow keeps the view stable while the VFO moves within it,
+    matching how a normal SDR panadapter behaves.
+    """
+    st = rtl_engine.status()
+    if not st.get("running"):
+        return
+    center = st.get("center_hz") or 0
+    sr = st.get("sample_rate") or 0
+    if not sr:
+        return
+    half = sr / 2
+    margin = sr * 0.1  # recenter once within 10% of either edge, or fully outside
+    if hz < (center - half + margin) or hz > (center + half - margin):
+        rtl_engine.set_center(hz)
+
+
+async def _release_ws_source(src: str, tag: str):
+    """Release whichever engine `src` refers to; hand the RTL dongle back to CyberSDR
+    only once EVERY holder has released (not on each individual disconnect — another
+    connection/tab may still be actively viewing the panadapter)."""
+    if src == "rtl":
+        result = rtl_engine.release(tag)
+        if not result.get("running"):
+            await asyncio.to_thread(_cybersdr_post, "/api/decoder/start")
+    else:
+        wf_engine.release(tag)
+
+
 async def _audio_broadcast(pcm: bytes):
     if not _audio_clients:
         return
@@ -220,13 +276,15 @@ async def _startup():
         "dnf_changed", "notch_changed", "contour_changed", "comp_changed",
         "vox_changed", "cw_changed", "af_changed", "rf_changed", "antenna_changed",
         "power_changed", "mic_changed", "monitor_changed", "lock_changed",
-        "atu_changed",
+        "atu_changed", "radio_power_changed",
     ]:
         rig.on(event, lambda *_: _broadcast())
 
     runner = MacroRunner(rig, settings.callsign)
     wf_engine.on_row(_wf_push_row)
     wf_engine.on_pcm(_wf_push_pcm)
+    rtl_engine.on_row(_wf_push_row)
+    rig.on("freq_changed", lambda hz: _maybe_follow_vfo(int(hz)))
 
     port = settings.cat_port
     baud = settings.cat_baud
@@ -257,6 +315,10 @@ async def _shutdown():
         wf_engine.stop()
     except Exception:
         pass
+    try:
+        rtl_engine.stop()
+    except Exception:
+        pass
     rig.disconnect()
     if _rigctld:
         _rigctld.stop()
@@ -278,12 +340,22 @@ async def waterfall_ws(ws: WebSocket):
     """Stream FFT rows + accept control messages (start/stop/range/qsy)."""
     await ws.accept()
     _wf_clients.append(ws)
-    acquired = False
+    acquired_source: Optional[str] = None
+    # Unique per-connection tag — NOT a shared literal like "waterfall". The
+    # engines' acquire/release use a set (membership, not a refcount) so a
+    # second connection reusing the same tag string would be a no-op on
+    # acquire, and then wipe out the *first* connection's hold when it
+    # disconnects and releases that same tag — killing a still-active viewer's
+    # session. (Confirmed live 2026-07-22: a diagnostic script sharing the
+    # "waterfall" tag disconnected and silently stopped the real browser session,
+    # leaving CyberSDR paused with nothing using the dongle.)
+    ws_tag = f"ws-{id(ws)}"
     # Hello + status
     await ws.send_text(json.dumps({
         "type": "hello",
         "status": wf_engine.status(),
         "devices": wf_engine.list_devices(),
+        "rtl_status": rtl_engine.status(),
         "vfo": rig.state.freq_a,
         "mode": rig.state.mode,
     }))
@@ -296,18 +368,53 @@ async def waterfall_ws(ws: WebSocket):
                 continue
             mtype = msg.get("type")
             if mtype == "start":
-                idx = msg.get("device_index", None)
-                result = wf_engine.acquire("waterfall", idx)
-                acquired = result.get("ok", False)
-                await ws.send_text(json.dumps({"type": "status", **result}))
+                src = msg.get("source", "audio")
+                if acquired_source and acquired_source != src:
+                    await _release_ws_source(acquired_source, ws_tag)
+                    acquired_source = None
+                if src == "rtl":
+                    await asyncio.to_thread(_cybersdr_post, "/api/decoder/stop")
+                    center = msg.get("center_hz") or rig.state.freq_a or settings.get("rtl_center_hz")
+                    # start() retries the rtl_tcp connect for up to ~3min (absorbing
+                    # CyberSDR's in-flight-capture race) — run off the event loop.
+                    result = await asyncio.to_thread(
+                        rtl_engine.acquire,
+                        ws_tag,
+                        settings.get("rtl_host"),
+                        settings.get("rtl_port"),
+                        center,
+                        msg.get("sample_rate") or settings.get("rtl_sample_rate"),
+                    )
+                    if not result.get("ok"):
+                        # We paused CyberSDR expecting to take the dongle; the connect
+                        # ultimately failed (retries exhausted) — don't strand it paused.
+                        await asyncio.to_thread(_cybersdr_post, "/api/decoder/start")
+                else:
+                    result = wf_engine.acquire(ws_tag, msg.get("device_index"))
+                acquired_source = src if result.get("ok") else None
+                await ws.send_text(json.dumps({"type": "status", "source": src, **result}))
             elif mtype == "stop":
-                if acquired:
-                    wf_engine.release("waterfall")
-                    acquired = False
-                await ws.send_text(json.dumps({"type": "status", **wf_engine.status(), "ok": True}))
+                stopped_src = acquired_source or "audio"
+                if acquired_source:
+                    await _release_ws_source(acquired_source, ws_tag)
+                    acquired_source = None
+                status = rtl_engine.status() if stopped_src == "rtl" else wf_engine.status()
+                await ws.send_text(json.dumps({"type": "status", "source": stopped_src, **status, "ok": True}))
             elif mtype == "range":
-                wf_engine.set_range(float(msg.get("db_min", -90)), float(msg.get("db_max", -20)))
-                await ws.send_text(json.dumps({"type": "status", **wf_engine.status(), "ok": True}))
+                # Audio (float32-normalized FFT) and RTL (raw 8-bit IQ FFT) run on
+                # totally different magnitude scales — applying one Floor/Ceil to
+                # both saturates whichever engine isn't the intended target.
+                db_min, db_max = float(msg.get("db_min", -90)), float(msg.get("db_max", -20))
+                if acquired_source == "rtl":
+                    rtl_engine.set_range(db_min, db_max)
+                    status = rtl_engine.status()
+                else:
+                    wf_engine.set_range(db_min, db_max)
+                    status = wf_engine.status()
+                await ws.send_text(json.dumps({"type": "status", **status, "ok": True}))
+            elif mtype == "speed":
+                rtl_engine.set_speed(float(msg.get("rows_per_sec", 6)))
+                await ws.send_text(json.dumps({"type": "status", **rtl_engine.status(), "ok": True}))
             elif mtype == "qsy":
                 # offset_hz from left edge of audio baseband (0 … SR/2)
                 try:
@@ -336,9 +443,9 @@ async def waterfall_ws(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        if acquired:
+        if acquired_source:
             try:
-                wf_engine.release("waterfall")
+                await _release_ws_source(acquired_source, ws_tag)
             except Exception:
                 pass
         if ws in _wf_clients:
@@ -775,6 +882,7 @@ class WfStartReq(BaseModel):
 
 @app.post("/api/waterfall/start")
 async def wf_start(req: WfStartReq = WfStartReq()):
+    rtl_engine.release("api")  # mutual exclusion — only one waterfall source active at a time
     return wf_engine.acquire("api", req.device_index)
 
 
@@ -786,6 +894,51 @@ async def wf_stop():
 @app.get("/api/waterfall/status")
 async def wf_status():
     return wf_engine.status()
+
+
+# ── RTL-SDR Panadapter REST — EXPERIMENTAL, see README "Safety" ──────────────
+class PanStartReq(BaseModel):
+    host: Optional[str] = None
+    port: Optional[int] = None
+    center_hz: Optional[int] = None
+    sample_rate: Optional[int] = None
+
+
+@app.post("/api/panadapter/start")
+async def pan_start(req: PanStartReq = PanStartReq()):
+    wf_engine.release("api")  # mutual exclusion — only one waterfall source active at a time
+    await asyncio.to_thread(_cybersdr_post, "/api/decoder/stop")
+    center = req.center_hz or rig.state.freq_a or settings.get("rtl_center_hz")
+    # start() retries the rtl_tcp connect for up to ~3min (absorbing CyberSDR's
+    # in-flight-capture race) — run off the event loop so other requests aren't blocked.
+    result = await asyncio.to_thread(
+        rtl_engine.acquire,
+        "api",
+        req.host or settings.get("rtl_host"),
+        req.port or settings.get("rtl_port"),
+        center,
+        req.sample_rate or settings.get("rtl_sample_rate"),
+    )
+    if not result.get("ok"):
+        # We paused CyberSDR expecting to take the dongle; the connect ultimately
+        # failed (retries exhausted) — don't strand it paused.
+        await asyncio.to_thread(_cybersdr_post, "/api/decoder/start")
+    return result
+
+
+@app.post("/api/panadapter/stop")
+async def pan_stop():
+    result = rtl_engine.release("api")
+    if not result.get("running"):
+        # Only resume CyberSDR once every holder (e.g. a browser tab via /ws/waterfall)
+        # has released too — don't yank the dongle out from under another active viewer.
+        await asyncio.to_thread(_cybersdr_post, "/api/decoder/start")
+    return result
+
+
+@app.get("/api/panadapter/status")
+async def pan_status():
+    return rtl_engine.status()
 
 
 # ── Connection ────────────────────────────────────────────────────────────
@@ -1260,6 +1413,13 @@ async def atu_tune():
     return {"ok": True, "atu": rig.state.atu, "atu_tuning": rig.state.atu_tuning}
 
 
+# ── Main Rig Power (CAT PS) — radio's own power switch, not app connect ────
+@app.post("/api/radio_power")
+async def set_radio_power(req: BoolReq):
+    rig.set_radio_power(req.on)
+    return {"ok": True, "radio_on": rig.state.radio_on}
+
+
 # ── Parametric EQ (EX 03 03: TX DSP EQ / Mic P-EQ) ───────────────────────
 # Read on demand only (not part of the continuous poll) — matches the old
 # desktop panel's "Read from Radio" UX; these are radio-menu items, not
@@ -1366,6 +1526,29 @@ async def store_memory(req: MemStoreReq):
         sh=s.sh, att=s.att, preamp=s.preamp,
     )
     memories.append(ch)
+    save_memories(memories)
+    return {"ok": True, "memories": [m.to_dict() for m in memories]}
+
+
+class MemStoreSlotReq(BaseModel):
+    name: str
+
+@app.post("/api/memories/store_slot/{idx}")
+async def store_memory_slot(idx: int, req: MemStoreSlotReq):
+    """Store into a fixed slot index (used by the main-window hypermemory bar),
+    padding with blank channels so slot numbering stays stable regardless of
+    how many memories exist yet."""
+    if idx < 0:
+        return {"ok": False, "error": "index out of range"}
+    s = rig.state
+    ch = MemoryChannel(
+        name=req.name.strip() or f"CH{idx + 1:02d}",
+        freq=s.freq_a, mode=s.mode, power=s.power,
+        sh=s.sh, att=s.att, preamp=s.preamp,
+    )
+    while len(memories) <= idx:
+        memories.append(MemoryChannel(name=f"CH{len(memories) + 1:02d}"))
+    memories[idx] = ch
     save_memories(memories)
     return {"ok": True, "memories": [m.to_dict() for m in memories]}
 

@@ -32,6 +32,19 @@ _HAMLIB_TO_RIG = {
 }
 _RIG_TO_HAMLIB = {v: k for k, v in _HAMLIB_TO_RIG.items()}
 
+# Short-form (single letter) command → canonical name. Hamlib's rigctld
+# protocol uses CASE here to mean get vs set — lowercase=get, uppercase=set
+# — so this map must be built with exact case, never .lower()'d as a whole.
+_SHORT_CMD_MAP = {
+    "f": "get_freq",  "F": "set_freq",
+    "m": "get_mode",  "M": "set_mode",
+    "t": "get_ptt",   "T": "set_ptt",
+    "v": "get_vfo",   "V": "set_vfo",
+    "l": "get_level", "L": "set_level",
+    "s": "get_split_vfo", "S": "set_split_vfo",
+    "q": "quit",      "Q": "quit",
+}
+
 # Minimal dump_state block recognised by WSJT-X / flrig
 _DUMP_STATE = """\
 0
@@ -155,38 +168,45 @@ class RigctlServer:
     # ------------------------------------------------------------------ #
 
     def _dispatch(self, line: str) -> str:
-        # Extended (backslash) form: \command [args...]
+        # Extended (backslash) form: \command [args...] — command is already an
+        # unambiguous word (e.g. "set_freq"), case doesn't carry meaning.
         if line.startswith("\\"):
             parts = line[1:].split()
             cmd = parts[0].lower()
             args = parts[1:]
         else:
-            # Short form: single character command
-            cmd = line[0].lower()
+            # Short form: a SINGLE LETTER, and hamlib's rigctld protocol uses
+            # CASE to distinguish get vs set (f=get_freq, F=set_freq; m/M;
+            # t/T; v/V — lowercase always "get", uppercase always "set").
+            # Lowercasing this (as the code used to) silently turned every
+            # set command into its get equivalent — CAT looked like it worked
+            # (RPRT 0 came back) but nothing ever actually changed on the rig.
+            letter = line[0]
             args = line[1:].split()
+            cmd = _SHORT_CMD_MAP.get(letter, letter.lower())
 
         # ---- read commands ----
-        if cmd in ("get_freq", "f"):
+        if cmd == "get_freq":
             return f"{self._rig.state.freq_a}\nRPRT 0\n"
 
-        if cmd in ("get_mode", "m"):
+        if cmd == "get_mode":
             hl = _RIG_TO_HAMLIB.get(self._rig.state.mode, "USB")
             return f"{hl}\n3000\nRPRT 0\n"
 
-        if cmd in ("get_ptt", "t"):
+        if cmd == "get_ptt":
             return f"{'1' if self._rig.state.is_tx else '0'}\nRPRT 0\n"
 
-        if cmd in ("get_vfo", "v"):
+        if cmd == "get_vfo":
             return "VFOA\nRPRT 0\n"
 
-        if cmd in ("dump_state",):
+        if cmd == "dump_state":
             return _DUMP_STATE
 
-        if cmd in ("get_info", "\\get_info"):
+        if cmd == "get_info":
             return "FTDX10 via CyberRig\nRPRT 0\n"
 
         # ---- write commands ----
-        if cmd in ("set_freq", "f") and args:
+        if cmd == "set_freq" and args:
             try:
                 hz = int(float(args[0]))
                 self._rig.set_freq(hz)
@@ -194,19 +214,19 @@ class RigctlServer:
             except ValueError:
                 return "RPRT -1\n"
 
-        if cmd in ("set_mode", "m") and args:
+        if cmd == "set_mode" and args:
             rig_mode = _HAMLIB_TO_RIG.get(args[0].upper(), "USB")
             self._rig.set_mode(rig_mode)
             return "RPRT 0\n"
 
-        if cmd in ("set_ptt", "t") and args:
+        if cmd == "set_ptt" and args:
             self._rig.set_ptt(args[0] == "1")
             return "RPRT 0\n"
 
-        if cmd in ("set_vfo", "v"):
+        if cmd == "set_vfo":
             return "RPRT 0\n"   # single VFO for now
 
-        if cmd in ("get_level",) and args:
+        if cmd == "get_level" and args:
             lvl = args[0].upper()
             if lvl == "STRENGTH":
                 # Convert raw 0–30 to dBm-ish: S9 = -73 dBm
@@ -215,16 +235,16 @@ class RigctlServer:
                 return f"{dbm:.1f}\nRPRT 0\n"
             return "0\nRPRT 0\n"
 
-        if cmd in ("get_split_vfo",):
+        if cmd == "get_split_vfo":
             return "0\nVFOA\nRPRT 0\n"
 
         if cmd in ("set_split_vfo", "set_split_freq", "set_split_mode"):
             return "RPRT 0\n"
 
-        if cmd in ("chk_vfo",):
+        if cmd == "chk_vfo":
             return "CHKVFO 0\nRPRT 0\n"
 
-        if cmd in ("quit", "q"):
+        if cmd == "quit":
             return "RPRT 0\n"
 
         log.debug("rigctld: unknown command %r", line)
