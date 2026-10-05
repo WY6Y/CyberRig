@@ -1,0 +1,2446 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CyberRig — FTDX10</title>
+<meta name="description" content="Yaesu FTDX10 remote rig control — VFO, S-meter, SWR, macros">
+<meta name="theme-color" content="#0b140b">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CyberRig">
+<meta name="application-name" content="CyberRig">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/static/icons/favicon-16.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="icon" href="/static/icons/favicon.ico" sizes="any">
+<script src="/static/lan-audio.js"></script>
+<script src="/static/remote-tx.js"></script>
+<style>
+.hdr-btn.active-listen { background: #003355; border-color: var(--blue); color: var(--blue); }
+.hdr-btn.active-txarm { background: #3a2000; border-color: var(--orange); color: var(--orange); }
+.hdr-btn.radio-off { background: #3a0000; border-color: var(--red); color: var(--red); }
+#txarm-msg {
+  display: none;
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  top: calc(8px + env(safe-area-inset-top, 0px));
+  z-index: 9999;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font: 600 13px/1.35 ui-monospace, Menlo, monospace;
+  background: #14181d;
+  border: 1px solid #3a4450;
+  color: #cfd8e3;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.55);
+}
+#txarm-msg.show { display: block; }
+#txarm-msg.err { border-color: #ff3366; color: #ff8098; }
+#txarm-msg.tx  { border-color: #ffcc00; color: #ffcc00; }
+#txarm-msg.live { border-color: #00ff9f; color: #00ff9f; }
+#ptt-btn.remote-armed {
+  border-color: var(--orange); box-shadow: 0 0 8px #ff880044;
+  user-select: none; -webkit-user-select: none; touch-action: none;
+}
+#ptt-btn.remote-armed:not(.on)::after {
+  content: ' · HOLD';
+  font-size: 12px; letter-spacing: 1px; opacity: 0.85;
+}
+#ptt-btn.remote-armed.on {
+  background: var(--red); color: #000; border-color: #ff0000;
+  box-shadow: 0 0 16px var(--red);
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:      #060b06;
+  --panel:   #0b140b;
+  --border:  #2a5a2a;
+  --green:   #33ff99;   /* primary text — bright */
+  --gdim:    #66cc88;   /* secondary — was too dark at #007744 */
+  --gbright: #66ff66;   /* active / emphasis */
+  --orange:  #ffaa33;
+  --red:     #ff4444;
+  --blue:    #44bbff;
+  --freq:    #55ff77;
+  --tx-bg:   #2a0a00;
+}
+html {
+  height: 100%;
+  /* iOS PWA: fill screen including under notch / home indicator */
+  height: -webkit-fill-available;
+  background: var(--bg);
+}
+html, body {
+  background: var(--bg); color: var(--green);
+  font-family: Consolas, 'Cascadia Mono', 'Segoe UI Mono', 'Courier New', monospace;
+  font-size: 15px; font-weight: 600; -webkit-font-smoothing: antialiased;
+}
+body {
+  display: flex; flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  height: -webkit-fill-available;
+  overflow: hidden;
+  /* Notch / Dynamic Island on top. Bottom inset lives on #ops-dock so PTT
+     sits above the home indicator instead of under it. */
+  padding-top: constant(safe-area-inset-top);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-right: constant(safe-area-inset-right);
+  padding-right: env(safe-area-inset-right, 0px);
+  padding-left: constant(safe-area-inset-left);
+  padding-left: env(safe-area-inset-left, 0px);
+}
+/* Installed home-screen app: never let top chrome sit under the system status bar */
+@media all and (display-mode: standalone) {
+  body {
+    padding-top: max(12px, constant(safe-area-inset-top));
+    padding-top: max(12px, env(safe-area-inset-top, 12px));
+  }
+}
+button, input { font-weight: 700; }
+
+/* ─── HEADER ─────────────────────────────────────────────────────── */
+#hdr {
+  display: flex; align-items: center; gap: 8px;
+  background: #050c05; border-bottom: 1px solid var(--border);
+  padding: 8px 12px; flex-shrink: 0; flex-wrap: wrap;
+  z-index: 200;
+}
+#hdr .logo { color: var(--gbright); font-weight: 800; font-size: 20px;
+  letter-spacing: 3px; margin-right: 8px; }
+#conn-dot { width: 12px; height: 12px; border-radius: 50%;
+  background: var(--red); display: inline-block; }
+#conn-dot.on { background: var(--gbright); box-shadow: 0 0 8px var(--gbright); }
+#port-in { background: var(--panel); color: var(--green); border: 1px solid var(--border);
+  padding: 5px 8px; width: 100px; font-family: inherit; font-size: 14px; font-weight: 700; }
+.hdr-btn { background: var(--panel); color: var(--green); border: 1px solid var(--border);
+  padding: 6px 12px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1px; }
+#tx-profile {
+  background: var(--panel); color: var(--green); border: 1px solid var(--border);
+  padding: 6px 8px; font-family: inherit; font-size: 13px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1px;
+}
+.hdr-btn:hover { background: var(--border); color: var(--gbright); }
+#tx-ind { color: var(--orange); font-weight: 800; display: none; padding: 4px 10px;
+  border: 2px solid var(--orange); letter-spacing: 2px; font-size: 14px; }
+#tx-ind.on { display: inline; }
+#callsign { color: var(--green); margin-left: auto; letter-spacing: 2px;
+  font-size: 16px; font-weight: 800; }
+.hdr-tools { position: relative; }
+.hdr-tools > summary {
+  list-style: none; cursor: pointer;
+  background: var(--panel); color: var(--green); border: 1px solid var(--border);
+  padding: 6px 12px; font-size: 13px; font-weight: 700; letter-spacing: 1px;
+}
+.hdr-tools > summary::-webkit-details-marker { display: none; }
+.hdr-tools[open] > summary { border-color: var(--gbright); color: var(--gbright); }
+.hdr-tools-menu {
+  position: absolute; right: 0; top: calc(100% + 4px);
+  background: #050c05; border: 1px solid var(--border);
+  display: flex; flex-direction: column; min-width: 160px; z-index: 300;
+}
+.hdr-tools-menu .hdr-btn { border: 0; border-bottom: 1px solid var(--border); text-align: left; }
+#scroll { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; min-height: 0; }
+
+/* ─── FREQUENCY ──────────────────────────────────────────────────── */
+#freq-area {
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  padding: 10px 14px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  flex-shrink: 0;
+}
+#freq-main { display: flex; flex-direction: column; }
+#freq-display {
+  display: flex; align-items: stretch; gap: 0;
+  font-size: 56px; font-weight: 800; color: var(--freq); letter-spacing: 0;
+  line-height: 1; user-select: none;
+  text-shadow: 0 0 18px #33ff6644;
+  min-height: 1.1em;
+}
+#freq-display.tx { color: var(--orange); text-shadow: 0 0 18px #ff880066; }
+#freq-display.tx .fdig { color: var(--orange); }
+#freq-display .fsep {
+  color: var(--gdim); padding: 0 2px; align-self: center;
+  pointer-events: none; letter-spacing: 0;
+}
+#freq-display .fdig {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 0.62em; padding: 0 1px;
+  cursor: ns-resize; border-radius: 3px;
+  position: relative;
+  color: var(--freq);
+}
+#freq-display .fdig.mhz { color: var(--gbright); }
+#freq-display .fdig.hz { color: #55cc77; opacity: 0.92; }
+#freq-display .fdig:hover {
+  background: #0d3d2088;
+  box-shadow: inset 0 0 0 1px #33ff6644;
+}
+/* Subtle top/bottom cues on hover */
+#freq-display .fdig:hover::before,
+#freq-display .fdig:hover::after {
+  content: '';
+  position: absolute; left: 15%; right: 15%; height: 2px;
+  background: #66ff6644; pointer-events: none;
+}
+#freq-display .fdig:hover::before { top: 4px; }
+#freq-display .fdig:hover::after { bottom: 4px; }
+#freq-input-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+#freq-in {
+  display: none; background: var(--bg); color: var(--freq); border: 2px solid var(--freq);
+  font-size: 28px; font-family: inherit; font-weight: 800; padding: 4px 8px; width: 240px;
+}
+.tune-btn {
+  background: var(--bg); color: var(--green); border: 1px solid var(--border);
+  padding: 4px 10px; cursor: pointer; font-size: 12px; font-weight: 700;
+}
+.tune-btn:hover { color: var(--gbright); border-color: var(--gbright); }
+#vfo-b-area { display: flex; flex-direction: column; gap: 4px; }
+#vfo-b-label { font-size: 12px; color: var(--gdim); font-weight: 700; letter-spacing: 1px; }
+#vfo-b-freq { font-size: 28px; color: var(--green); letter-spacing: 2px; font-weight: 800; }
+#vfo-btns { display: flex; gap: 4px; }
+.small-btn {
+  background: var(--bg); color: var(--green); border: 1px solid var(--border);
+  padding: 5px 10px; cursor: pointer; font-size: 12px; font-weight: 700; text-transform: uppercase;
+}
+.small-btn:hover { color: var(--gbright); border-color: var(--gbright); }
+.small-btn.active { background: var(--border); color: var(--gbright); }
+
+/* ─── MODE + BAND ROWS ───────────────────────────────────────────── */
+#mode-band {
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  padding: 8px 12px; display: flex; gap: 14px; flex-wrap: wrap;
+}
+.mode-row, .band-row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.row-label { color: var(--green); font-size: 12px; font-weight: 800; margin-right: 6px;
+  letter-spacing: 1px; }
+.mode-btn, .band-btn {
+  background: var(--bg); color: var(--green); border: 1px solid var(--border);
+  padding: 6px 11px; cursor: pointer; font-size: 13px; font-weight: 700; white-space: nowrap;
+}
+.mode-btn:hover, .band-btn:hover { color: var(--gbright); border-color: var(--gbright); }
+.mode-btn.active { background: #004422; color: var(--gbright); border-color: var(--gbright);
+  font-weight: 800; }
+.band-btn.active { background: #002244; color: var(--blue); border-color: var(--blue);
+  font-weight: 800; }
+
+/* ─── HYPERMEMORY BAR ────────────────────────────────────────────── */
+#hyper-mem {
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  padding: 8px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+#hyper-mem .btn-group { flex: 1; }
+.hmem-btn {
+  background: var(--bg); color: var(--green); border: 1px solid var(--border);
+  padding: 6px 10px; cursor: pointer; font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; gap: 6px; min-width: 120px;
+  touch-action: none; user-select: none;
+}
+.hmem-btn:hover { border-color: var(--gbright); }
+.hmem-btn.empty { color: var(--gdim); font-style: italic; }
+.hmem-btn .hmem-num {
+  color: var(--gbright); font-weight: 800; background: #002244; border: 1px solid var(--blue);
+  padding: 1px 5px; font-size: 11px;
+}
+.hmem-btn.empty .hmem-num { background: transparent; border-color: var(--border); color: var(--gdim); }
+.hmem-btn .hmem-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+.hmem-btn.flash { background: #004422; border-color: var(--gbright); color: var(--gbright); }
+
+/* ─── MAIN CONTROLS GRID ─────────────────────────────────────────── */
+#ctrl-grid {
+  display: grid;
+  grid-template-columns: 180px 1fr 1fr 1fr;
+  gap: 0;
+}
+.panel {
+  border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  padding: 10px; display: flex; flex-direction: column; gap: 10px;
+}
+.panel:last-child { border-right: none; }
+.panel-title {
+  font-size: 13px; color: var(--gbright); text-transform: uppercase;
+  letter-spacing: 2px; border-bottom: 1px solid var(--border); padding-bottom: 5px;
+  margin-bottom: 2px; font-weight: 800;
+}
+
+/* ─── S-METER ────────────────────────────────────────────────────── */
+#smeter-canvas { display: block; width: 160px; height: 90px; }
+.meter-bar-wrap { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.meter-row { display: flex; align-items: center; gap: 6px; }
+.meter-label { font-size: 12px; color: var(--green); width: 34px; flex-shrink: 0; font-weight: 800; }
+.meter-track { flex: 1; height: 12px; background: #0a1a0a; border: 1px solid var(--border);
+  position: relative; overflow: hidden; }
+.meter-fill { height: 100%; width: 0; transition: width 0.08s linear; }
+.meter-fill.pwr { background: linear-gradient(90deg, #22cc55, var(--orange)); }
+.meter-fill.alc { background: linear-gradient(90deg, #22cc55, #ffcc00 60%, var(--red)); }
+.meter-fill.swr { background: linear-gradient(90deg, #33ee66 0%, #33ee66 35%, #ffcc00 50%, #ff8800 70%, var(--red) 100%); }
+.meter-fill.sig { background: var(--gbright); }
+.meter-num { font-size: 14px; color: var(--gbright); width: 42px; text-align: right;
+  flex-shrink: 0; font-weight: 800; }
+.meter-num.warn { color: var(--orange); }
+.meter-num.danger { color: var(--red); text-shadow: 0 0 6px var(--red); }
+
+/* PO / ALC / SWR live in the bottom ops dock so they stay next to PTT */
+#ops-dock {
+  flex-shrink: 0;
+  background: #050c05;
+  border-top: 2px solid var(--border);
+  padding: 8px 12px;
+  padding-bottom: calc(8px + constant(safe-area-inset-bottom));
+  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  z-index: 200;
+}
+#dock-meters {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.dock-meter {
+  min-width: 0;
+  padding: 4px 10px 6px;
+  border: 2px solid var(--border);
+  background: #000;
+  text-align: center;
+  border-radius: 2px;
+}
+.dock-meter .swr-title, .dock-meter .po-title, .dock-meter .alc-title {
+  font-size: 11px; color: var(--green); letter-spacing: 3px; text-transform: uppercase;
+  font-weight: 800;
+}
+.dock-meter .swr-value, .dock-meter .po-value, .dock-meter .alc-value {
+  font-size: 32px; font-weight: 800; color: var(--gdim); line-height: 1.15;
+  letter-spacing: 1px; white-space: nowrap;
+}
+#swr-badge.tx, #po-badge.tx, #alc-badge.tx { border-color: var(--orange); box-shadow: 0 0 12px #ff880044; }
+#swr-badge.hot, #po-badge.hot, #alc-badge.hot { border-color: var(--red); box-shadow: 0 0 16px #ff333366; background: #1a0505; }
+#swr-badge.tx .swr-value, #po-badge.tx .po-value, #alc-badge.tx .alc-value { color: var(--gbright); }
+#swr-badge.hot .swr-value, #po-badge.hot .po-value, #alc-badge.hot .alc-value { color: var(--red); text-shadow: 0 0 10px var(--red); }
+.dock-meter .swr-hint {
+  font-size: 11px; color: var(--green); letter-spacing: 1px; min-height: 14px; font-weight: 700;
+}
+
+/* ─── GENERIC CONTROLS ───────────────────────────────────────────── */
+.ctrl-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ctrl-label { font-size: 13px; color: var(--green); min-width: 36px; font-weight: 800; }
+.ctrl-val { font-size: 13px; color: var(--gbright); min-width: 44px; text-align: right;
+  font-weight: 800; }
+input[type="range"] {
+  -webkit-appearance: none; flex: 1; height: 6px;
+  background: var(--border); outline: none; min-width: 60px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--gbright); cursor: pointer; box-shadow: 0 0 6px var(--gbright);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--gbright); cursor: pointer; border: none;
+}
+.btn-group { display: flex; gap: 3px; flex-wrap: wrap; }
+.tgl {
+  background: var(--bg); color: var(--green); border: 1px solid var(--border);
+  padding: 5px 10px; cursor: pointer; font-size: 12px; font-family: inherit; font-weight: 700;
+  text-transform: uppercase;
+}
+.tgl:hover { color: var(--gbright); border-color: var(--gbright); }
+.tgl.active { background: #004422; color: var(--gbright); border-color: var(--gbright);
+  font-weight: 800; }
+.tgl.danger { border-color: #550000; }
+.tgl.danger.active { background: #440000; color: var(--red); border-color: var(--red); }
+.tgl.warn.active { background: #2a1a00; color: var(--orange); border-color: var(--orange); }
+
+/* ─── PTT + REMOTE TUNE ──────────────────────────────────────────── */
+#ptt-btn {
+  width: 100%; padding: 16px; font-size: 22px; font-weight: 800;
+  font-family: inherit; letter-spacing: 3px; cursor: pointer; border: 2px solid var(--red);
+  touch-action: manipulation; user-select: none; -webkit-user-select: none;
+  background: #220000; color: var(--red); text-transform: uppercase; transition: all 0.1s;
+}
+#ptt-btn.on {
+  background: var(--red); color: #000; border-color: #ff0000;
+  box-shadow: 0 0 16px var(--red);
+}
+#remote-tune-btn {
+  width: 100%; padding: 12px; font-size: 15px; font-weight: 800;
+  font-family: inherit; letter-spacing: 1px; cursor: pointer;
+  border: 2px solid var(--orange); background: #1a1200; color: var(--orange);
+  text-transform: uppercase; transition: all 0.1s; margin-top: 6px;
+}
+#remote-tune-btn:hover { background: #2a1a00; }
+#remote-tune-btn.on {
+  background: var(--orange); color: #000; border-color: #ffcc00;
+  box-shadow: 0 0 18px #ff8800aa; animation: tune-pulse 1.2s ease-in-out infinite;
+}
+#remote-tune-btn .tune-sub {
+  display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+  opacity: 0.85; margin-top: 2px; text-transform: none;
+}
+/* WSPR auto-tune. Its own colour language on purpose: this is the only
+   control on the page that hands the transmitter to something unattended,
+   so ARMED does not look like every other green toggle. */
+#wspr-box { margin-top: 8px; }
+#wspr-btn {
+  width: 100%; padding: 11px; font-size: 14px; font-weight: 800;
+  font-family: inherit; letter-spacing: 1px; cursor: pointer;
+  border: 2px solid var(--border); background: var(--panel); color: var(--gdim);
+  text-transform: uppercase; transition: all 0.1s;
+}
+#wspr-btn:hover { border-color: var(--gbright); color: var(--gbright); }
+#wspr-btn .tune-sub {
+  display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.3px;
+  opacity: 0.85; margin-top: 2px; text-transform: none;
+}
+#wspr-btn.armed {
+  background: #00220f; color: var(--green); border-color: var(--green);
+  box-shadow: 0 0 14px #33ff9944;
+}
+#wspr-btn.tuning {
+  background: var(--orange); color: #000; border-color: #ffcc00;
+  animation: tune-pulse 1.2s ease-in-out infinite;
+}
+#wspr-btn.hold {
+  background: #2a1a00; color: var(--orange); border-color: var(--orange);
+}
+#wspr-btn.stopped {
+  background: #330000; color: var(--red); border-color: var(--red);
+  box-shadow: 0 0 14px #ff444466;
+}
+#wspr-detail {
+  display: none; font-size: 11px; line-height: 1.4; color: var(--orange);
+  border-left: 2px solid var(--orange); padding: 6px 8px; margin-top: 6px;
+  background: #140e00;
+}
+#wspr-detail.urgent { color: var(--red); border-left-color: var(--red); background: #180000; }
+#wspr-actions { display: none; gap: 6px; margin-top: 6px; }
+#wspr-actions .tgl { flex: 1; padding: 8px 6px; font-size: 12px; }
+#wspr-stats {
+  font-size: 10px; color: var(--gdim); margin: 5px 0 0 2px; letter-spacing: 0.3px;
+}
+#atu-row {
+  display: flex; gap: 6px; margin-top: 8px; margin-bottom: 4px;
+}
+#atu-row .tgl {
+  flex: 1; padding: 10px 8px; font-size: 13px; letter-spacing: 1px;
+  text-align: center;
+}
+#atu-tune-btn.tuning {
+  background: var(--orange); color: #000; border-color: #ffcc00;
+  box-shadow: 0 0 14px #ff8800aa; animation: tune-pulse 1.0s ease-in-out infinite;
+}
+#atu-hint {
+  font-size: 10px; color: var(--gdim); margin: 0 0 8px 2px; letter-spacing: 0.3px;
+}
+@keyframes tune-pulse {
+  0%, 100% { box-shadow: 0 0 10px #ff880066; }
+  50% { box-shadow: 0 0 22px #ffaa00cc; }
+}
+
+/* ─── CW PANEL ───────────────────────────────────────────────────── */
+#cw-panel {
+  border-top: 1px solid var(--border); padding: 10px 14px;
+  display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; flex-shrink: 0;
+}
+#cw-input {
+  flex: 1; background: var(--bg); color: var(--gbright); border: 1px solid var(--border);
+  font-family: inherit; font-size: 16px; font-weight: 700; padding: 8px 10px; min-width: 200px;
+}
+#cw-input:focus { outline: none; border-color: var(--gbright); }
+#cw-send-btn {
+  background: var(--panel); color: var(--gbright); border: 2px solid var(--gbright);
+  padding: 8px 16px; cursor: pointer; font-family: inherit; font-size: 14px; font-weight: 800;
+  letter-spacing: 1px;
+}
+#cw-send-btn:hover { background: var(--gbright); color: #000; }
+.cw-quick-btn {
+  background: var(--bg); color: var(--green); border: 1px solid var(--border);
+  padding: 6px 12px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700;
+}
+.cw-quick-btn:hover { color: var(--gbright); border-color: var(--gbright); }
+
+/* ─── MACRO PANEL ────────────────────────────────────────────────── */
+#macro-panel {
+  border-top: 1px solid var(--border); padding: 10px 14px;
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap; flex-shrink: 0;
+  background: #050c05;
+}
+.macro-btn {
+  background: var(--panel); color: var(--green); border: 1px solid var(--border);
+  padding: 8px 14px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700;
+}
+.macro-btn:hover { color: var(--gbright); border-color: var(--gbright); }
+.macro-btn.running { color: var(--orange); border-color: var(--orange);
+  background: #1a0f00; }
+#macro-stop {
+  background: #2a0000; color: var(--red); border: 1px solid var(--red);
+  padding: 8px 14px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 800;
+  margin-left: auto;
+}
+#macro-stop:hover { background: var(--red); color: #000; }
+
+/* ─── SPLIT/RIT section ──────────────────────────────────────────── */
+.rit-row { display: flex; align-items: center; gap: 4px; }
+#rit-offset-disp { font-size: 13px; color: var(--gbright); min-width: 60px; text-align: right; }
+
+/* ─── responsive ─────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  #ctrl-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 600px) {
+  #ctrl-grid { grid-template-columns: 1fr; }
+  #freq-display { font-size: 32px; }
+  #vfo-b-area { display: none; }
+  #freq-input-row .tune-btn:not(#freq-type-btn) { display: none; }
+  .dock-meter .swr-value, .dock-meter .po-value, .dock-meter .alc-value { font-size: 24px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!--  HEADER                                                                -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<header id="hdr">
+  <span class="logo">CYBERRIG</span>
+  <span id="conn-dot" title="CAT link"></span>
+  <span id="conn-label" style="font-size:13px;font-weight:700;color:var(--green)">CAT OFFLINE</span>
+  <span id="tx-ind">TX</span>
+  <span id="callsign">—</span>
+  <button class="hdr-btn" id="listen-btn" onclick="toggleLanAudio()"
+          title="Stream FTDX10 RX audio over your LAN/VPN">🎧 LISTEN</button>
+  <select id="tx-profile" title="TX mic profile: USB profiles send your browser mic; Front-panel mic uses the radio's own mic"
+          onchange="txProfileChanged()"></select>
+  <button class="hdr-btn" id="txarm-btn" onclick="toggleRemoteTxArm()"
+          title="Arm remote mic TX (USB audio out + CAT PTT). Then HOLD PTT to talk.">🎙 REMOTE TX</button>
+  <div id="txarm-msg" role="status" aria-live="polite"></div>
+  <button class="hdr-btn" id="freedv-btn" onclick="location.href='/freedv'"
+          title="FreeDV / RADE digital voice">FREEDV</button>
+  <button class="hdr-btn" id="sstv-btn" onclick="location.href='/sstv'"
+          title="SSTV — send a picture">SSTV</button>
+  <button class="hdr-btn" id="ft8-btn" onclick="openFt8()"
+          title="FT8 — JTDX decode list, waterfall and guarded TX (separate process)">FT8</button>
+  <details class="hdr-tools">
+    <summary>MORE</summary>
+    <div class="hdr-tools-menu">
+      <button class="hdr-btn" id="radio-pwr-btn" onclick="toggleRadioPower()"
+              title="Turn the FTDX10's main power on/off over CAT (PS).">⏻ RADIO</button>
+      <button class="hdr-btn" onclick="openEq()" title="Parametric EQ">EQ</button>
+      <button class="hdr-btn" onclick="openMacrosEditor()" title="Macro editor">MACROS</button>
+      <button class="hdr-btn" onclick="openMemories()" title="Memory channels">MEMORIES</button>
+      <button class="hdr-btn" id="txtone-btn" onclick="remoteTxTestTone()"
+              title="Key radio and play 700 Hz test tone for 2s">TEST TONE</button>
+      <div id="tx-gain-row" class="ctrl-row" style="padding:8px;flex-wrap:nowrap">
+        <span class="ctrl-label" style="min-width:52px">TX GAIN</span>
+        <input type="range" min="10" max="250" value="65" id="tx-gain-sl"
+               oninput="txGainInput()">
+        <span class="ctrl-val" id="tx-gain-val">0.65</span>
+      </div>
+    </div>
+  </details>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!--  FREQUENCY DISPLAY                                                     -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<section id="freq-area">
+  <div id="freq-main">
+    <div id="freq-display"
+         title="Top half of digit: + · Bottom half: − · Wheel: step that digit · Long-press or TYPE: enter freq">
+      <!-- filled by renderFreqDisplay() -->
+    </div>
+    <div id="freq-input-row">
+      <input id="freq-in" type="text" placeholder="MHz e.g. 14.2"
+             onkeydown="freqKey(event)" onblur="freqCancel()">
+      <button class="tune-btn" id="freq-type-btn" onclick="freqClick()"
+              title="Type frequency (MHz / kHz / Hz)">TYPE</button>
+      <button class="tune-btn" onclick="tune(-1000000)">◀ 1M</button>
+      <button class="tune-btn" onclick="tune(-100000)">◀ 100k</button>
+      <button class="tune-btn" onclick="tune(-1000)">◀ 1k</button>
+      <button class="tune-btn" onclick="tune(1000)">1k ▶</button>
+      <button class="tune-btn" onclick="tune(100000)">100k ▶</button>
+      <button class="tune-btn" onclick="tune(1000000)">1M ▶</button>
+    </div>
+  </div>
+
+  <div id="vfo-b-area">
+    <div id="vfo-b-label">VFO B</div>
+    <div id="vfo-b-freq">14.200.000</div>
+    <div id="vfo-btns">
+      <!-- Hidden 2026-08-28 while settings.single_vfo is on: this radio was
+           found receiving on VFO B with no working CAT way back (VS; and SV;
+           are both inert on it), and every tune landed on the VFO nobody was
+           listening to. Frequency/mode writes now mirror to B automatically.
+           The endpoints refuse these too, so re-showing them is not enough. -->
+      <button class="small-btn" style="display:none" onclick="api('/api/vfo_swap')">SWAP</button>
+      <button class="small-btn" style="display:none" onclick="api('/api/vfo_a_to_b')">A→B</button>
+      <button class="small-btn" style="display:none" onclick="api('/api/vfo_b_to_a')">B→A</button>
+    </div>
+  </div>
+</section>
+
+<div id="scroll">
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!--  MODE + BAND ROWS                                                      -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<section id="mode-band">
+  <div class="mode-row">
+    <span class="row-label">MODE</span>
+    <div id="mode-btns" class="btn-group">
+      <!-- filled by JS -->
+    </div>
+  </div>
+  <div class="band-row">
+    <span class="row-label">BAND</span>
+    <div class="btn-group" id="band-btns">
+      <!-- filled by JS -->
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!--  HYPERMEMORY BAR — 6 quick-recall slots (01-06)                        -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<section id="hyper-mem">
+  <span class="row-label">MEM</span>
+  <div class="btn-group" id="hyper-mem-btns">
+    <!-- filled by JS -->
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!--  MAIN CONTROLS GRID                                                    -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<div id="ctrl-grid">
+
+  <!-- ── S-METER + TX METERS (always visible) ──────────────────────── -->
+  <div class="panel" id="smeter-panel">
+    <div class="panel-title">Signal / TX</div>
+    <canvas id="smeter-canvas" width="160" height="90"></canvas>
+    <div class="meter-bar-wrap" id="tx-meters">
+      <div class="meter-row">
+        <span class="meter-label">PWR</span>
+        <div class="meter-track"><div class="meter-fill pwr" id="m-pwr"></div></div>
+        <span class="meter-num" id="m-pwr-num">—</span>
+      </div>
+      <div class="meter-row">
+        <span class="meter-label">ALC</span>
+        <div class="meter-track"><div class="meter-fill alc" id="m-alc"></div></div>
+        <span class="meter-num" id="m-alc-num">—</span>
+      </div>
+      <div class="meter-row">
+        <span class="meter-label">SWR</span>
+        <div class="meter-track"><div class="meter-fill swr" id="m-swr"></div></div>
+        <span class="meter-num" id="m-swr-num">—.—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RX CONTROLS ───────────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-title">Receive</div>
+
+    <div class="ctrl-row">
+      <span class="ctrl-label">AF</span>
+      <input type="range" min="0" max="255" value="150" id="af-sl"
+             oninput="sliderChange('af_gain','af-sl','af-val', v => api('/api/af_gain',{val:+v}))">
+      <span class="ctrl-val" id="af-val">150</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">RF</span>
+      <input type="range" min="0" max="255" value="200" id="rf-sl"
+             oninput="sliderChange('rf_gain','rf-sl','rf-val', v => api('/api/rf_gain',{val:+v}))">
+      <span class="ctrl-val" id="rf-val">200</span>
+    </div>
+
+    <div class="ctrl-row">
+      <span class="ctrl-label" style="min-width:20px">AGC</span>
+      <div class="btn-group" id="agc-btns">
+        <button class="tgl" data-mode="AUTO" onclick="setAGC('AUTO')">AUTO</button>
+        <button class="tgl" data-mode="FAST" onclick="setAGC('FAST')">F</button>
+        <button class="tgl" data-mode="MID"  onclick="setAGC('MID')">M</button>
+        <button class="tgl" data-mode="SLOW" onclick="setAGC('SLOW')">S</button>
+        <button class="tgl" data-mode="OFF"  onclick="setAGC('OFF')">OFF</button>
+      </div>
+    </div>
+
+    <div class="ctrl-row">
+      <span class="ctrl-label" style="min-width:20px">PRE</span>
+      <div class="btn-group" id="preamp-btns">
+        <button class="tgl" onclick="api('/api/preamp',{mode:'IPO'})">IPO</button>
+        <button class="tgl" onclick="api('/api/preamp',{mode:'AMP1'})">AMP1</button>
+        <button class="tgl" onclick="api('/api/preamp',{mode:'AMP2'})">AMP2</button>
+      </div>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label" style="min-width:20px">ATT</span>
+      <div class="btn-group" id="att-btns">
+        <button class="tgl" onclick="api('/api/att',{mode:'OFF'})">OFF</button>
+        <button class="tgl" onclick="api('/api/att',{mode:'6dB'})">6dB</button>
+        <button class="tgl" onclick="api('/api/att',{mode:'12dB'})">12dB</button>
+        <button class="tgl" onclick="api('/api/att',{mode:'18dB'})">18dB</button>
+      </div>
+    </div>
+
+    <div class="ctrl-row">
+      <button class="tgl" id="nb-btn" onclick="toggleNB()">NB</button>
+      <input type="range" min="0" max="10" value="5" id="nb-sl"
+             oninput="sliderChange('nb_level','nb-sl','nb-val', v => api('/api/nb',{on:state.nb,level:+v}))">
+      <span class="ctrl-val" id="nb-val">5</span>
+    </div>
+    <div class="ctrl-row">
+      <button class="tgl" id="nr-btn" onclick="toggleNR()">DNR</button>
+      <input type="range" min="1" max="15" value="5" id="nr-sl"
+             oninput="sliderChange('nr_level','nr-sl','nr-val', v => api('/api/nr',{on:state.nr,level:+v}))">
+      <span class="ctrl-val" id="nr-val">5</span>
+    </div>
+  </div>
+
+  <!-- ── FILTER ────────────────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-title">Filter</div>
+
+    <div class="ctrl-row">
+      <span class="ctrl-label">WIDTH</span>
+      <input type="range" min="0" max="23" value="13" id="sh-sl"
+             oninput="shChange()">
+      <span class="ctrl-val" id="sh-val">2400 Hz</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">IF</span>
+      <input type="range" min="-1200" max="1200" step="20" value="0" id="ifs-sl"
+             oninput="ifsChange()">
+      <span class="ctrl-val" id="ifs-val">0</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">ROOF</span>
+      <div class="btn-group" id="roof-btns">
+        <button class="tgl" onclick="api('/api/roofing',{filter:'12K'})">12K</button>
+        <button class="tgl" onclick="api('/api/roofing',{filter:'3K'})">3K</button>
+        <button class="tgl" onclick="api('/api/roofing',{filter:'500'})">500</button>
+        <button class="tgl" onclick="api('/api/roofing',{filter:'300'})">300</button>
+      </div>
+    </div>
+
+    <div class="ctrl-row">
+      <button class="tgl" id="dnf-btn" onclick="toggleDNF()">DNF</button>
+      <span style="font-size:12px;font-weight:700;color:var(--green);margin-left:4px">Auto notch</span>
+    </div>
+
+    <div class="ctrl-row">
+      <button class="tgl" id="notch-btn" onclick="toggleNotch()">NOTCH</button>
+      <input type="range" min="10" max="3200" step="10" value="1000" id="notch-sl"
+             oninput="notchFreqChange()">
+      <span class="ctrl-val" id="notch-val">1000</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">NOTCH W</span>
+      <div class="btn-group" id="notch-w-btns">
+        <button class="tgl" onclick="api('/api/notch_width',{wide:false})">NARROW</button>
+        <button class="tgl" onclick="api('/api/notch_width',{wide:true})">WIDE</button>
+      </div>
+    </div>
+
+    <div class="ctrl-row">
+      <button class="tgl" id="ctr-btn" onclick="toggleContour()">CONTOUR</button>
+      <input type="range" min="10" max="3200" step="10" value="1000" id="ctr-sl"
+             oninput="ctrFreqChange()">
+      <span class="ctrl-val" id="ctr-val">1000</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">C LVL</span>
+      <input type="range" min="-40" max="20" value="0" id="ctr-lvl-sl"
+             oninput="ctrLevelChange()">
+      <span class="ctrl-val" id="ctr-lvl-val">0</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">C WID</span>
+      <input type="range" min="1" max="11" value="6" id="ctr-wid-sl"
+             oninput="ctrWidthChange()">
+      <span class="ctrl-val" id="ctr-wid-val">6</span>
+    </div>
+
+    <div class="ctrl-row">
+      <button class="tgl" id="apf-btn" onclick="toggleAPF()">APF</button>
+      <span style="font-size:12px;font-weight:700;color:var(--green);margin-left:4px">Audio peak</span>
+    </div>
+  </div>
+
+  <!-- ── TX + SPLIT/RIT ────────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-title">Transmit &amp; Split</div>
+
+    <!-- Internal FTDX10 ATU (CAT AC) — separate from REMOTE TUNE below -->
+    <div id="atu-row">
+      <button type="button" class="tgl" id="atu-btn" onclick="toggleATU()"
+              title="Internal antenna tuner on/off (CAT AC001/AC000)">ATU</button>
+      <button type="button" class="tgl" id="atu-tune-btn" onclick="atuTune()"
+              title="Start or abort internal ATU tune cycle (CAT AC002). Keys the radio briefly.">TUNE</button>
+    </div>
+    <div id="atu-hint">Internal ATU · ATU = on/off · TUNE = match now</div>
+
+    <!-- Remote autotuner (MFJ-994BRT) — continuous ~20W AM carrier. NOT internal ATU. -->
+    <button id="remote-tune-btn" onclick="toggleRemoteTune()"
+            title="Keys ~20W AM carrier for remote autotuner (MFJ). Not the FTDX10 internal ATU.">
+      <span id="remote-tune-label">REMOTE TUNE</span>
+      <span class="tune-sub" id="remote-tune-sub">20W AM · MFJ / external</span>
+    </button>
+
+    <!-- WSPR mode: JTDX's band hops tune the MFJ by themselves, supervised.
+         The only control here that lets something transmit unattended. -->
+    <div id="wspr-box">
+      <button id="wspr-btn" onclick="toggleWspr()"
+              title="Arms WSPR mode: a band hop from JTDX QSYs ~30 kHz off the WSPR window, runs the MFJ tune, checks the SWR actually came down and returns to the dial. Any beacon key arriving mid-tune is refused (one slot skipped). Stuck-TX and runaway SWR drop PTT over CAT.">
+        <span id="wspr-label">WSPR AUTO-TUNE</span>
+        <span class="tune-sub" id="wspr-sub">disarmed · JTDX band hops do not tune</span>
+      </button>
+      <div id="wspr-detail"></div>
+      <div id="wspr-actions">
+        <button type="button" class="tgl" id="wspr-clear" onclick="wsprClear()"
+                title="The band is fine — carry on beaconing.">CLEAR HOLD</button>
+        <button type="button" class="tgl danger" id="wspr-resume" onclick="wsprResume()"
+                title="Clear a hard stop. The watchdog fired repeatedly; look at the antenna first.">RESUME</button>
+      </div>
+      <div id="wspr-stats"></div>
+    </div>
+
+    <div class="ctrl-row">
+      <span class="ctrl-label">PWR</span>
+      <input type="range" min="5" max="100" value="50" id="pwr-sl"
+             oninput="sliderChange('power','pwr-sl','pwr-val', v => api('/api/power',{watts:+v}))">
+      <span class="ctrl-val" id="pwr-val">50 W</span>
+    </div>
+
+    <div class="ctrl-row">
+      <button class="tgl" id="comp-btn" onclick="toggleComp()">PROC</button>
+      <input type="range" min="0" max="100" value="50" id="comp-sl"
+             oninput="sliderChange('comp_level','comp-sl','comp-val', v => api('/api/compressor',{on:state.compressor,level:+v}))">
+      <span class="ctrl-val" id="comp-val">50</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">MIC</span>
+      <input type="range" min="0" max="100" value="50" id="mic-sl"
+             oninput="sliderChange('mic_gain','mic-sl','mic-val', v => api('/api/mic_gain',{val:+v}))">
+      <span class="ctrl-val" id="mic-val">50</span>
+    </div>
+    <div class="ctrl-row">
+      <button class="tgl" id="vox-btn" onclick="toggleVOX()">VOX</button>
+      <input type="range" min="0" max="100" value="50" id="vox-sl"
+             oninput="sliderChange('vox_gain','vox-sl','vox-val', v => api('/api/vox',{on:state.vox,gain:+v}))">
+      <span class="ctrl-val" id="vox-val">50</span>
+    </div>
+    <div class="ctrl-row">
+      <button class="tgl" id="mon-btn" onclick="toggleMon()">MON</button>
+      <input type="range" min="0" max="100" value="50" id="mon-sl"
+             oninput="sliderChange('mon_level','mon-sl','mon-val', v => api('/api/monitor',{on:state.monitor,level:+v}))">
+      <span class="ctrl-val" id="mon-val">50</span>
+    </div>
+
+    <div class="ctrl-row">
+      <span class="ctrl-label" style="min-width:20px">ANT</span>
+      <div class="btn-group" id="ant-btns">
+        <button class="tgl" onclick="api('/api/antenna',{ant:1})">ANT 1</button>
+        <button class="tgl" onclick="api('/api/antenna',{ant:2})">ANT 2</button>
+      </div>
+    </div>
+
+    <hr style="border-color:var(--border); margin:4px 0">
+
+    <div class="ctrl-row">
+      <button class="tgl" id="split-btn" onclick="toggleSplit()">SPLIT</button>
+      <span style="font-size:12px;font-weight:700;color:var(--green);margin-left:4px">TX VFO:</span>
+      <div class="btn-group" id="txvfo-btns">
+        <button class="tgl" onclick="api('/api/split',{on:state.split,tx_vfo:'A'})">A</button>
+        <button class="tgl" onclick="api('/api/split',{on:state.split,tx_vfo:'B'})">B</button>
+      </div>
+    </div>
+
+    <div class="ctrl-row">
+      <button class="tgl" id="rit-btn" onclick="toggleRIT()">RIT</button>
+      <button class="tgl" id="xit-btn" onclick="toggleXIT()">XIT</button>
+      <span class="ctrl-val" id="rit-offset-disp">+0 Hz</span>
+    </div>
+    <div class="ctrl-row rit-row">
+      <button class="tgl" onclick="api('/api/rit_down')" title="-100 Hz">◀</button>
+      <button class="tgl" onclick="api('/api/rit_clear')">ZERO</button>
+      <button class="tgl" onclick="api('/api/rit_up')" title="+100 Hz">▶</button>
+    </div>
+  </div>
+
+
+</div><!-- #ctrl-grid -->
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!--  CW PANEL                                                              -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<section id="cw-panel">
+  <div style="display:flex;flex-direction:column;gap:4px;min-width:200px">
+    <div class="panel-title">CW</div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">WPM</span>
+      <input type="number" min="4" max="60" value="20" id="cw-wpm"
+             style="width:50px;background:var(--bg);color:var(--green);border:1px solid var(--border);font-family:inherit;padding:2px 4px"
+             onchange="api('/api/cw_speed',{wpm:+this.value})">
+      <span class="ctrl-label" style="margin-left:8px">PITCH</span>
+      <input type="number" min="300" max="1050" step="10" value="600" id="cw-pitch"
+             style="width:60px;background:var(--bg);color:var(--green);border:1px solid var(--border);font-family:inherit;padding:2px 4px"
+             onchange="api('/api/cw_pitch',{hz:+this.value})">
+      <span style="font-size:12px;font-weight:700;color:var(--green)">Hz</span>
+      <button class="tgl" id="bi-btn" onclick="toggleBI()" style="margin-left:8px">BREAK-IN OFF</button>
+    </div>
+    <div class="ctrl-row" style="flex-wrap:nowrap">
+      <input id="cw-input" type="text" placeholder="CW message to send…">
+      <button id="cw-send-btn" onclick="cwSend()">▶ SEND</button>
+    </div>
+    <div class="ctrl-row">
+      <button class="cw-quick-btn" id="cq-btn" onclick="cwQuick('cq')">CQ DE $CALL K</button>
+      <button class="cw-quick-btn" onclick="cwQuick('73')">73 DE $CALL</button>
+      <button class="cw-quick-btn" onclick="cwQuick('tu')">TU 73 DE $CALL</button>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!--  MACRO PANEL                                                           -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<section id="macro-panel">
+  <span class="panel-title" style="border:none;margin-right:4px">MACROS</span>
+  <div id="macro-btns" style="display:flex;gap:4px;flex-wrap:wrap;flex:1"></div>
+  <button id="macro-stop" onclick="api('/api/macros/stop')">■ STOP</button>
+</section>
+</div><!-- #scroll -->
+
+<footer id="ops-dock">
+  <div id="dock-meters">
+    <div class="dock-meter" id="po-badge" title="Power out from radio RM meter">
+      <div class="po-title">PO</div>
+      <div class="po-value" id="dock-po-val">—</div>
+      <div class="swr-hint" id="dock-po-hint">RX</div>
+    </div>
+    <div class="dock-meter" id="alc-badge" title="ALC from radio RM meter">
+      <div class="alc-title">ALC</div>
+      <div class="alc-value" id="dock-alc-val">—</div>
+      <div class="swr-hint" id="dock-alc-hint">RX</div>
+    </div>
+    <div class="dock-meter" id="swr-badge" title="SWR from radio RM meter">
+      <div class="swr-title">SWR</div>
+      <div class="swr-value" id="swr-big">—.—</div>
+      <div class="swr-hint" id="swr-hint">RX</div>
+    </div>
+  </div>
+  <button type="button" id="ptt-btn">PTT</button>
+</footer>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!--  JAVASCRIPT                                                            -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<script>
+const MODES = ['LSB','USB','CW-U','CW-L','AM','AM-N','FM','FM-N',
+               'RTTY-L','RTTY-U','DATA-U','DATA-L','PSK'];
+const BANDS = ['160m','80m','60m','40m','30m','20m','17m','15m','12m','10m','6m'];
+const BAND_FREQ = {
+  '160m':1850000,'80m':3800000,'60m':5371500,'40m':7200000,
+  '30m':10125000,'20m':14200000,'17m':18130000,'15m':21300000,
+  '12m':24940000,'10m':28500000,'6m':50125000
+};
+const BAND_EDGES = {
+  '160m':[1800000,2000000],'80m':[3500000,4000000],'60m':[5330500,5403500],
+  '40m':[7000000,7300000],'30m':[10100000,10150000],'20m':[14000000,14350000],
+  '17m':[18068000,18168000],'15m':[21000000,21450000],'12m':[24890000,24990000],
+  '10m':[28000000,29700000],'6m':[50000000,54000000]
+};
+let callsign = '';
+let macros = [];
+
+let state = {
+  connected:false, freq_a:14200000, freq_b:14200000, mode:'USB',
+  smeter:0, is_tx:false, power:50, power_meter:0, alc_meter:0, swr_meter:0,
+  tune_active:false, tune_watts:20, tune_mode:'AM', tune_timeout_sec:90,
+  wspr:{armed:false, phase:'idle'},
+  po_max_watts:100, po_cal:0.67,
+  split:false, tx_vfo:'B', rit:false, xit:false, rit_offset:0,
+  sh:13, sh_hz:2400, if_shift:0, af_gain:150, rf_gain:200,
+  agc:'AUTO', preamp:'IPO', att:'OFF', nb:false, nb_level:5,
+  nr:false, nr_level:5, dnf:false, notch:false, notch_pos:1000,
+  contour:false, contour_freq:1000, contour_level:0, contour_width:6,
+  notch_width:'WIDE', roofing:'3K', apf:false, compressor:false, comp_level:50,
+  vox:false, vox_gain:50, vox_delay:100, monitor:false, mon_level:50,
+  cw_speed:20, cw_pitch:600, cw_breakin:false, cw_delay:200,
+  antenna:1, locked:false, mic_gain:50, atu:false, atu_tuning:false,
+  radio_on:true,
+  macro_running:false
+};
+
+// ── Helpers ────────────────────────────────────────────────────────────
+function formatFreq(hz) {
+  const M = Math.floor(hz / 1000000);
+  const k = Math.floor((hz % 1000000) / 1000);
+  const h = hz % 1000;
+  return `${M}.${String(k).padStart(3,'0')}.${String(h).padStart(3,'0')}`;
+}
+
+// 9 digits MMM.kkk.hhh — step for digit index 0..8 (100 MHz … 1 Hz)
+const DIGIT_STEPS = [1e8, 1e7, 1e6, 1e5, 1e4, 1e3, 1e2, 1e1, 1e0];
+// Long-press opens type-in; short press always nudges (never opens entry on double-click).
+const FREQ_LONG_PRESS_MS = 650;
+let _digitPtr = null; // { idx, y0, timer, opened }
+
+function renderFreqDisplay(hz) {
+  const el = document.getElementById('freq-display');
+  if (!el || el.dataset.editing === '1') return;
+  const digits = String(Math.max(0, Math.min(999999999, Math.round(hz)))).padStart(9, '0');
+  // Rebuild only if digit string changed (preserve hover DOM stability where possible)
+  if (el.dataset.digits === digits && el.childElementCount > 0) return;
+  el.dataset.digits = digits;
+  el.innerHTML = '';
+  for (let i = 0; i < 9; i++) {
+    if (i === 3 || i === 6) {
+      const sep = document.createElement('span');
+      sep.className = 'fsep';
+      sep.textContent = '.';
+      el.appendChild(sep);
+    }
+    const d = document.createElement('span');
+    d.className = 'fdig' + (i < 3 ? ' mhz' : i >= 6 ? ' hz' : '');
+    d.dataset.idx = String(i);
+    d.textContent = digits[i];
+    // pointer events: short = top/bottom nudge; long-press = type entry (no dblclick)
+    d.addEventListener('pointerdown', onDigitPointerDown);
+    d.addEventListener('pointerup', onDigitPointerUp);
+    d.addEventListener('pointercancel', onDigitPointerCancel);
+    d.addEventListener('lostpointercapture', onDigitPointerCancel);
+    d.addEventListener('wheel', onDigitWheel, { passive: false });
+    // Never open type-in on double-click — rapid nudges must stay pure nudges
+    d.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); });
+    el.appendChild(d);
+  }
+}
+
+function _clearDigitPtr() {
+  if (_digitPtr && _digitPtr.timer) clearTimeout(_digitPtr.timer);
+  _digitPtr = null;
+}
+
+function onDigitPointerDown(e) {
+  // Left button / touch / pen only
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const idx = +e.currentTarget.dataset.idx;
+  if (idx < 0 || idx > 8) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const y = e.clientY - rect.top;
+  _clearDigitPtr();
+  _digitPtr = {
+    idx,
+    y0: y,
+    h: rect.height,
+    opened: false,
+    el: e.currentTarget,
+    timer: setTimeout(() => {
+      if (!_digitPtr) return;
+      _digitPtr.opened = true;
+      freqClick();
+    }, FREQ_LONG_PRESS_MS),
+  };
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+}
+
+function onDigitPointerUp(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const p = _digitPtr;
+  if (!p) return;
+  const wasOpen = p.opened;
+  const idx = p.idx;
+  const y = (e.clientY != null && p.el)
+    ? (e.clientY - p.el.getBoundingClientRect().top)
+    : p.y0;
+  const h = p.h || 1;
+  _clearDigitPtr();
+  try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
+  if (wasOpen) return; // long-press already opened type-in
+  // Short press: top half + / bottom half −
+  const dir = (y < h / 2) ? 1 : -1;
+  tune(dir * DIGIT_STEPS[idx]);
+}
+
+function onDigitPointerCancel() {
+  _clearDigitPtr();
+}
+
+function onDigitWheel(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const idx = +e.currentTarget.dataset.idx;
+  const step = DIGIT_STEPS[Number.isFinite(idx) ? idx : 5];
+  const dir = e.deltaY < 0 ? 1 : -1;
+  tune(dir * step);
+}
+
+function freqBand(hz) {
+  for (const [b,[lo,hi]] of Object.entries(BAND_EDGES))
+    if (hz >= lo && hz <= hi) return b;
+  return null;
+}
+
+async function api(path, body = {}) {
+  try {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    return r.json();
+  } catch (e) { console.error('api', path, e); }
+}
+
+const _debounceMap = {};
+function debounce(key, fn, ms = 150) {
+  clearTimeout(_debounceMap[key]);
+  _debounceMap[key] = setTimeout(fn, ms);
+}
+
+// ── WebSocket ──────────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.onopen = () => console.log('WS connected');
+  ws.onmessage = e => {
+    Object.assign(state, JSON.parse(e.data));
+    updateUI();
+  };
+  ws.onclose = () => {
+    console.log('WS closed, retrying…');
+    setTimeout(connectWS, 3000);
+  };
+  ws.onerror = () => ws.close();
+}
+
+// ── Build static UI elements ───────────────────────────────────────────
+function buildModeButtons() {
+  const c = document.getElementById('mode-btns');
+  MODES.forEach(m => {
+    const b = document.createElement('button');
+    b.className = 'mode-btn'; b.textContent = m; b.dataset.mode = m;
+    b.onclick = () => api('/api/mode', {mode: m});
+    c.appendChild(b);
+  });
+}
+function buildBandButtons() {
+  const c = document.getElementById('band-btns');
+  BANDS.forEach(b => {
+    const btn = document.createElement('button');
+    btn.className = 'band-btn'; btn.textContent = b; btn.dataset.band = b;
+    btn.onclick = () => api('/api/band', {band: b});
+    c.appendChild(btn);
+  });
+}
+function buildMacroButtons() {
+  fetch('/api/macros').then(r => r.json()).then(data => {
+    macros = data;
+    const c = document.getElementById('macro-btns');
+    c.innerHTML = '';
+    macros.forEach((m, i) => {
+      const b = document.createElement('button');
+      b.className = 'macro-btn';
+      b.textContent = m.key ? `${m.name} [${m.key}]` : m.name;
+      b.dataset.idx = i;
+      b.onclick = () => api(`/api/macros/run/${i}`);
+      c.appendChild(b);
+    });
+  });
+}
+
+// ── Hypermemory bar — 6 fixed quick-recall slots (01-06) ────────────────
+// Tap = recall. Hold ~0.6s = store current rig state into that slot.
+const HMEM_SLOTS = 6;
+const HMEM_LONG_PRESS_MS = 650;
+let _hmemPtr = null; // { idx, opened, timer }
+let hyperMemories = [];
+
+function buildHyperMemButtons() {
+  const c = document.getElementById('hyper-mem-btns');
+  for (let i = 0; i < HMEM_SLOTS; i++) {
+    const b = document.createElement('button');
+    b.className = 'hmem-btn empty';
+    b.dataset.idx = String(i);
+    b.innerHTML = `<span class="hmem-num">${String(i + 1).padStart(2, '0')}</span>` +
+                   `<span class="hmem-label">— empty —</span>`;
+    b.title = 'Hold ~0.6s to store current rig state here';
+    b.addEventListener('pointerdown', onHMemPointerDown);
+    b.addEventListener('pointerup', onHMemPointerUp);
+    b.addEventListener('pointercancel', onHMemPointerCancel);
+    b.addEventListener('lostpointercapture', onHMemPointerCancel);
+    c.appendChild(b);
+  }
+}
+
+function loadHyperMem() {
+  fetch('/api/memories').then(r => r.json()).then(data => {
+    hyperMemories = data;
+    renderHyperMem();
+  });
+}
+
+function renderHyperMem() {
+  const c = document.getElementById('hyper-mem-btns');
+  if (!c) return;
+  for (let i = 0; i < HMEM_SLOTS; i++) {
+    const btn = c.querySelector(`[data-idx="${i}"]`);
+    if (!btn) continue;
+    const m = hyperMemories[i];
+    const labelEl = btn.querySelector('.hmem-label');
+    if (m) {
+      const mhz = (m.freq / 1e6).toFixed(3);
+      labelEl.textContent = `${m.name} · ${mhz} ${m.mode}`;
+      btn.classList.remove('empty');
+      btn.title = `Tap to recall ${m.name} (${mhz} MHz ${m.mode}) · Hold ~0.6s to overwrite`;
+    } else {
+      labelEl.textContent = '— empty —';
+      btn.classList.add('empty');
+      btn.title = 'Hold ~0.6s to store current rig state here';
+    }
+  }
+}
+
+function _clearHMemPtr() {
+  if (_hmemPtr && _hmemPtr.timer) clearTimeout(_hmemPtr.timer);
+  _hmemPtr = null;
+}
+
+function onHMemPointerDown(e) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  e.preventDefault();
+  const idx = +e.currentTarget.dataset.idx;
+  _clearHMemPtr();
+  _hmemPtr = {
+    idx, opened: false,
+    timer: setTimeout(() => {
+      if (!_hmemPtr) return;
+      _hmemPtr.opened = true;
+      hMemStore(idx);
+    }, HMEM_LONG_PRESS_MS),
+  };
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+}
+
+function onHMemPointerUp(e) {
+  e.preventDefault();
+  const p = _hmemPtr;
+  _clearHMemPtr();
+  if (!p || p.opened) return;
+  hMemRecall(p.idx);
+}
+
+function onHMemPointerCancel() {
+  _clearHMemPtr();
+}
+
+function hMemRecall(idx) {
+  if (!hyperMemories[idx]) return; // empty slot — nothing to recall
+  api(`/api/memories/recall/${idx}`).then(res => {
+    if (!res || !res.ok) return;
+    const btn = document.querySelector(`.hmem-btn[data-idx="${idx}"]`);
+    if (btn) {
+      btn.classList.add('flash');
+      setTimeout(() => btn.classList.remove('flash'), 400);
+    }
+  });
+}
+
+function hMemStore(idx) {
+  const existing = hyperMemories[idx];
+  const defaultName = existing ? existing.name : `CH${String(idx + 1).padStart(2, '0')}`;
+  const name = prompt(`Store current rig state to slot ${String(idx + 1).padStart(2, '0')}?\nName:`, defaultName);
+  if (name === null) return; // cancelled
+  api(`/api/memories/store_slot/${idx}`, {name}).then(res => {
+    if (!res || !res.ok) return;
+    hyperMemories = res.memories;
+    renderHyperMem();
+  });
+}
+
+// ── UI update from state ───────────────────────────────────────────────
+function updateUI() {
+  // Connection
+  const dot = document.getElementById('conn-dot');
+  const lbl = document.getElementById('conn-label');
+  dot.className = state.connected ? 'on' : '';
+  lbl.textContent = state.connected ? 'CAT LINKED' : 'CAT OFFLINE';
+
+  // Radio main power (CAT PS) — separate from CyberRig's own connection
+  const pwrBtn = document.getElementById('radio-pwr-btn');
+  if (pwrBtn) {
+    pwrBtn.classList.toggle('radio-off', !state.radio_on);
+    pwrBtn.textContent = state.radio_on ? '⏻ RADIO ON' : '⏻ RADIO OFF';
+  }
+
+  // TX indicator
+  const txInd = document.getElementById('tx-ind');
+  txInd.className = state.is_tx ? 'on' : '';
+  document.body.style.background = state.is_tx ? 'var(--tx-bg)' : 'var(--bg)';
+
+  // PTT button — do NOT wipe remote-armed classes (that was killing hold-to-talk)
+  updatePttButton();
+
+  // Remote TUNE (MFJ) — separate from internal ATU
+  const rtBtn = document.getElementById('remote-tune-btn');
+  const rtLbl = document.getElementById('remote-tune-label');
+  const rtSub = document.getElementById('remote-tune-sub');
+  if (rtBtn) {
+    rtBtn.classList.toggle('on', !!state.tune_active);
+    if (rtLbl) rtLbl.textContent = state.tune_active ? '● TUNING' : 'REMOTE TUNE';
+    if (rtSub) {
+      const w = state.tune_watts || 20;
+      const m = state.tune_mode || 'AM';
+      rtSub.textContent = state.tune_active
+        ? `${w}W ${m} · tap to stop`
+        : `${w}W ${m} · MFJ / external`;
+    }
+  }
+
+  renderWspr(state.wspr);
+
+  // Frequency (per-digit top/bottom click)
+  const freqEl = document.getElementById('freq-display');
+  const editing = document.getElementById('freq-in').style.display === 'inline-block';
+  if (!editing) renderFreqDisplay(state.freq_a);
+  freqEl.classList.toggle('tx', !!state.is_tx);
+  document.getElementById('vfo-b-freq').textContent = formatFreq(state.freq_b);
+
+  // Mode buttons
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === state.mode);
+  });
+
+  // Band buttons
+  const band = freqBand(state.freq_a);
+  document.querySelectorAll('.band-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.band === band);
+  });
+
+  // S-meter / TX meters (SWR always on dash — critical)
+  drawSMeter(state.smeter);
+  updateTxMeters();
+
+  // RX sliders (don't override while user is dragging — handled by debounce)
+  syncSlider('af-sl', 'af-val', state.af_gain, v => v);
+  syncSlider('rf-sl', 'rf-val', state.rf_gain, v => v);
+  syncSlider('nb-sl', 'nb-val', state.nb_level, v => v);
+  syncSlider('nr-sl', 'nr-val', state.nr_level, v => v);
+  syncSlider('sh-sl', 'sh-val', state.sh, v => (state.sh_hz || 0) + ' Hz');
+  syncSlider('ifs-sl', 'ifs-val', state.if_shift, v => v + ' Hz');
+
+  // AGC
+  // Match on the mode each button SETS, never on its caption: the captions
+  // are abbreviated (F/M/S) and could never equal FAST/MID/SLOW, so only
+  // AUTO and OFF ever lit. AGC on MID showed no state at all.
+  // The radio also answers AUTO-FAST/AUTO-MID/AUTO-SLOW, never plain AUTO.
+  const agcNow = String(state.agc || '');
+  document.querySelectorAll('#agc-btns .tgl').forEach(b => {
+    const m = b.dataset.mode || b.textContent;
+    b.classList.toggle('active',
+      m === agcNow || (m === 'AUTO' && agcNow.startsWith('AUTO')));
+  });
+
+  // Preamp / ATT
+  setGroupActive('preamp-btns', state.preamp);
+  setGroupActive('att-btns', state.att);
+
+  // NB / NR
+  setTgl('nb-btn', state.nb);
+  setTgl('nr-btn', state.nr);
+
+  // Filter toggles
+  setTgl('dnf-btn', state.dnf);
+  setTgl('notch-btn', state.notch);
+  setTgl('ctr-btn', state.contour);
+  setTgl('apf-btn', state.apf);
+  syncSlider('notch-sl', 'notch-val', state.notch_pos, v => v + ' Hz');
+  syncSlider('ctr-sl', 'ctr-val', state.contour_freq, v => v + ' Hz');
+  syncSlider('ctr-lvl-sl', 'ctr-lvl-val', state.contour_level, v => v);
+  syncSlider('ctr-wid-sl', 'ctr-wid-val', state.contour_width, v => v);
+  document.querySelectorAll('#notch-w-btns .tgl').forEach(b => {
+    b.classList.toggle('active', b.textContent === state.notch_width);
+  });
+  document.querySelectorAll('#roof-btns .tgl').forEach(b => {
+    b.classList.toggle('active', b.textContent === state.roofing);
+  });
+
+  // TX controls
+  syncSlider('pwr-sl', 'pwr-val', state.power, v => v + ' W');
+  syncSlider('comp-sl', 'comp-val', state.comp_level, v => v);
+  syncSlider('mic-sl', 'mic-val', state.mic_gain, v => v);
+  syncSlider('vox-sl', 'vox-val', state.vox_gain, v => v);
+  syncSlider('mon-sl', 'mon-val', state.mon_level, v => v);
+  setTgl('comp-btn', state.compressor);
+  setTgl('vox-btn', state.vox);
+  setTgl('mon-btn', state.monitor);
+
+  // Antenna
+  document.querySelectorAll('#ant-btns .tgl').forEach((b, i) => {
+    b.classList.toggle('active', (i + 1) === state.antenna);
+  });
+
+  // Internal ATU
+  setTgl('atu-btn', state.atu);
+  const atuTuneBtn = document.getElementById('atu-tune-btn');
+  if (atuTuneBtn) {
+    atuTuneBtn.classList.toggle('tuning', !!state.atu_tuning);
+    atuTuneBtn.classList.toggle('active', !!state.atu_tuning);
+    atuTuneBtn.textContent = state.atu_tuning ? '● TUNING' : 'TUNE';
+  }
+  const atuBtn = document.getElementById('atu-btn');
+  if (atuBtn) atuBtn.textContent = state.atu ? 'ATU ON' : 'ATU';
+
+  // Split / RIT / XIT
+  setTgl('split-btn', state.split, 'warn');
+  document.querySelectorAll('#txvfo-btns .tgl').forEach((b, i) => {
+    b.classList.toggle('active', (i === 0 ? 'A' : 'B') === state.tx_vfo);
+  });
+  setTgl('rit-btn', state.rit, 'warn');
+  setTgl('xit-btn', state.xit, 'warn');
+  const sign = state.rit_offset >= 0 ? '+' : '';
+  document.getElementById('rit-offset-disp').textContent = `${sign}${state.rit_offset} Hz`;
+
+  // CW
+  const cwWpm = document.getElementById('cw-wpm');
+  if (document.activeElement !== cwWpm) cwWpm.value = state.cw_speed;
+  const cwPitch = document.getElementById('cw-pitch');
+  if (document.activeElement !== cwPitch) cwPitch.value = state.cw_pitch;
+  const biBtn = document.getElementById('bi-btn');
+  biBtn.textContent = state.cw_breakin ? 'BREAK-IN ON' : 'BREAK-IN OFF';
+  setTgl('bi-btn', state.cw_breakin);
+
+  // Macros
+  document.querySelectorAll('.macro-btn').forEach(b => {
+    b.classList.toggle('running', state.macro_running &&
+      parseInt(b.dataset.idx) === _runningIdx);
+  });
+}
+
+let _runningIdx = -1;
+
+function setBar(id, pct) {
+  document.getElementById(id).style.width = Math.min(100, pct) + '%';
+}
+
+function setTgl(id, on, cls = '') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('active', !!on);
+  if (cls) el.classList.toggle(cls, true);
+}
+
+function setGroupActive(groupId, activeText) {
+  document.querySelectorAll(`#${groupId} .tgl`).forEach(b => {
+    b.classList.toggle('active', b.textContent === activeText);
+  });
+}
+
+const _syncLock = new Set();
+function syncSlider(slId, valId, val, fmt) {
+  if (_syncLock.has(slId)) return;
+  const sl = document.getElementById(slId);
+  const vl = document.getElementById(valId);
+  if (sl && Math.abs(+sl.value - val) > 0.5) sl.value = val;
+  if (vl) vl.textContent = fmt(val);
+}
+
+function sliderChange(stateKey, slId, valId, apiFn) {
+  const v = document.getElementById(slId).value;
+  document.getElementById(valId).textContent = document.getElementById(slId).value +
+    (valId.includes('pwr') ? ' W' : valId.includes('ifs') ? ' Hz' : '');
+  state[stateKey] = +v;
+  _syncLock.add(slId);
+  debounce(slId, () => { apiFn(v); setTimeout(() => _syncLock.delete(slId), 500); });
+}
+
+// ── Meter calibration ─────────────────────────────────────────────────
+// Curves come from /api/meter_cal, which serves cyberrig/cat/meter_cal.py —
+// the same tables the native panel draws through, so a correction made there
+// reaches both UIs. What this replaced was wrong in a way that mattered: the
+// bars were raw/255, but full scale is raw 64 for ALC (so a rig in hard
+// limiting rendered as a comfortable 25%) and raw 205 for PO; watts came from
+// a hand-tuned `po_cal` fudge; and the SWR ratio came from an invented curve.
+// The literals below are a fallback for a failed fetch, copied from the same
+// source — do not "simplify" any full_raw to 255.
+let METER_CAL = {
+  PO:  { full_raw: 205, decimals: 0, unit: ' W', warn_raw: 176, crit_raw: 999,
+         cal: [[0,0],[27,5],[94,25],[147,50],[176,75],[205,100]] },
+  ALC: { full_raw: 64,  decimals: 0, unit: '%',  warn_raw: 58,  crit_raw: 64,
+         cal: [[0,0],[64,100]] },
+  SWR: { full_raw: 236, decimals: 1, unit: '',   warn_raw: 89,  crit_raw: 126,
+         cal: [[0,1.0],[26,1.2],[52,1.5],[89,2.0],[126,3.0],[173,4.0],[236,5.0],[255,25.0]] },
+};
+
+// The S-meter's own curve. /api/meter_cal has always served this; the page
+// used to ignore it and scale SM0 on an invented 0-50 scale instead, which
+// pinned the needle at full deflection for any raw >= 50 (about S3 up).
+// Raw is 0-255 like every other meter. Fallback copied from meter_cal.py.
+let SMETER_CAL = {
+  full_raw: 255, warn_raw: 157, crit_raw: 203,
+  ticks: [-48, -36, -24, -12, 0, 20, 40, 60],
+  cal: [[0,-54],[26,-42],[51,-30],[81,-18],[105,-9],[130,0],
+        [157,12],[186,25],[203,35],[237,50],[255,60]],
+};
+
+//: dB-over-S9 → the label printed on the scale (meter_cal._S_LABELS).
+const S_LABELS = {
+  '-48': '1', '-36': '3', '-24': '5', '-12': '7',
+  '0': '9', '20': '+20', '40': '+40', '60': '+60',
+};
+
+// Piecewise linear through the table, clamped at both ends rather than
+// extrapolated — matches Hamlib's rig_raw2val_float() and meter_cal._interp().
+function calInterp(cal, x, xi, yi) {
+  if (!cal || !cal.length) return 0;
+  const first = cal[0], last = cal[cal.length - 1];
+  if (x <= first[xi]) return first[yi];
+  if (x >= last[xi]) return last[yi];
+  for (let i = 0; i < cal.length - 1; i++) {
+    const a = cal[i], b = cal[i + 1];
+    if (a[xi] <= x && x <= b[xi]) {
+      const span = b[xi] - a[xi];
+      if (span === 0) return a[yi];
+      return a[yi] + (b[yi] - a[yi]) * (x - a[xi]) / span;
+    }
+  }
+  return last[yi];
+}
+
+function calValue(spec, raw) { return calInterp(spec.cal, +raw || 0, 0, 1); }
+
+// Bar fill is raw against that meter's real full scale, so the fill and the
+// number can never disagree.
+function calFraction(spec, raw) {
+  if (!spec || !(spec.full_raw > 0)) return 0;
+  return Math.max(0, Math.min(1, (+raw || 0) / spec.full_raw));
+}
+
+async function loadMeterCal() {
+  try {
+    const r = await fetch('/api/meter_cal');
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j && j.meters) METER_CAL = Object.assign({}, METER_CAL, j.meters);
+    if (j && j.smeter) SMETER_CAL = j.smeter;
+  } catch (e) { /* keep the built-in fallback */ }
+}
+
+// Returns null when there is no meaningful RF (raw 0) — never fake "1.0".
+function rawToSwr(raw) {
+  const r = Math.max(0, Math.min(255, +raw || 0));
+  if (r <= 0) return null;
+  return calValue(METER_CAL.SWR, r);
+}
+
+function swrClass(swr) {
+  if (swr == null) return '';
+  if (swr >= 2.0) return 'danger';
+  if (swr >= 1.5) return 'warn';
+  return '';
+}
+
+function swrHint(swr, isTx, hasRf) {
+  if (!isTx) return 'RX';
+  // During TX, CAT meters can lag on USB-audio key-up — don't scream NO RF
+  if (!hasRf) {
+    if (state.tune_active) return 'TUNE';
+    return 'TX';  // keyed; wait for PO/ALC (USB audio path)
+  }
+  if (swr == null) return 'TX';
+  if (swr < 1.5) return 'GOOD';
+  if (swr < 2.0) return 'OK';
+  if (swr < 3.0) return 'HIGH';
+  return 'STOP';
+}
+
+// Yaesu RM PO raw → watts, through the PO curve (100 W at raw 205, and
+// compressive below that). `po_cal` is no longer applied here; the curve
+// replaces it.
+function rawToWatts(raw) {
+  return Math.round(calValue(METER_CAL.PO, Math.max(0, Math.min(255, +raw || 0))));
+}
+
+// Hold last TX meter snapshot briefly after unkey so the operator can read it
+let _txMeterHold = { t: 0, pwr: 0, alc: 0, swr: 0 };
+
+function updateTxMeters() {
+  const tx = !!state.is_tx;
+  let pwrRaw = state.power_meter || 0;
+  let alcRaw = state.alc_meter || 0;
+  let swrRaw = state.swr_meter || 0;
+
+  if (tx && pwrRaw > 0) {
+    _txMeterHold = { t: Date.now(), pwr: pwrRaw, alc: alcRaw, swr: swrRaw };
+  } else if (!tx && Date.now() - _txMeterHold.t < 2500) {
+    // Show peak for 2.5s after unkey
+    pwrRaw = _txMeterHold.pwr;
+    alcRaw = _txMeterHold.alc;
+    swrRaw = _txMeterHold.swr;
+  } else if (!tx) {
+    pwrRaw = alcRaw = swrRaw = 0;
+  }
+
+  const show = tx || (Date.now() - _txMeterHold.t < 2500 && _txMeterHold.pwr > 0);
+  const hasRf = pwrRaw >= 3;
+  // Dummy load / excellent match often reports SWR raw ≈ 0 → treat as 1.0 when RF present
+  let swr = null;
+  if (hasRf) {
+    swr = (swrRaw <= 0) ? 1.0 : rawToSwr(swrRaw);
+  }
+  const approxW = hasRf ? rawToWatts(pwrRaw) : 0;
+  const setW = state.power || 0;
+
+  setBar('m-pwr', show ? calFraction(METER_CAL.PO, pwrRaw) * 100 : 0);
+  setBar('m-alc', show ? calFraction(METER_CAL.ALC, alcRaw) * 100 : 0);
+  // Positioned through the SWR curve, so 2.0 lands at 38% of the track the
+  // way it does on the panel — even spacing would be a lie to correct for.
+  setBar('m-swr', show && swr != null ? calFraction(METER_CAL.SWR, swrRaw) * 100 : 0);
+
+  const pwrEl = document.getElementById('m-pwr-num');
+  const alcEl = document.getElementById('m-alc-num');
+  const swrEl = document.getElementById('m-swr-num');
+  if (show && hasRf) {
+    pwrEl.textContent = approxW + 'W';
+    pwrEl.title = `PO≈${approxW}W (set ${setW}W, raw ${pwrRaw}, full scale ${METER_CAL.PO.full_raw})`;
+    alcEl.textContent = Math.round(calValue(METER_CAL.ALC, alcRaw));
+    swrEl.textContent = swr != null ? swr.toFixed(1) : '—.—';
+  } else if (tx) {
+    pwrEl.textContent = '…';
+    pwrEl.title = 'Waiting for PO from CAT…';
+    alcEl.textContent = '…';
+    swrEl.textContent = '…';
+  } else {
+    pwrEl.textContent = '—';
+    pwrEl.title = '';
+    alcEl.textContent = '—';
+    swrEl.textContent = '—.—';
+  }
+  swrEl.className = 'meter-num ' + swrClass(swr);
+
+  const badge = document.getElementById('swr-badge');
+  const big = document.getElementById('swr-big');
+  const hint = document.getElementById('swr-hint');
+  if (show && hasRf && swr != null) {
+    big.textContent = swr.toFixed(1);
+    hint.textContent = swrHint(swr, true, true);
+    badge.classList.toggle('hot', swr >= 2.0);
+    badge.classList.toggle('tx', swr < 2.0);
+  } else if (tx) {
+    big.textContent = '—.—';
+    hint.textContent = swrHint(null, true, false);
+    badge.classList.remove('hot');
+    badge.classList.toggle('tx', !!state.tune_active);
+  } else {
+    big.textContent = '—.—';
+    hint.textContent = 'RX';
+    badge.classList.remove('tx', 'hot');
+  }
+
+  const poVal = document.getElementById('dock-po-val');
+  const poHint = document.getElementById('dock-po-hint');
+  const poBadge = document.getElementById('po-badge');
+  if (poVal) {
+    if (show && hasRf) {
+      poVal.textContent = approxW + 'W';
+      if (poHint) poHint.textContent = 'TX';
+      if (poBadge) { poBadge.classList.add('tx'); poBadge.classList.remove('hot'); }
+    } else if (tx) {
+      poVal.textContent = '…';
+      if (poHint) poHint.textContent = 'TX';
+      if (poBadge) { poBadge.classList.add('tx'); poBadge.classList.remove('hot'); }
+    } else {
+      poVal.textContent = '—';
+      if (poHint) poHint.textContent = 'RX';
+      if (poBadge) poBadge.classList.remove('tx', 'hot');
+    }
+  }
+
+  const alcVal = document.getElementById('dock-alc-val');
+  const alcHint = document.getElementById('dock-alc-hint');
+  const alcBadge = document.getElementById('alc-badge');
+  if (alcVal) {
+    const alcPct = Math.round(calValue(METER_CAL.ALC, alcRaw));
+    const alcHot = hasRf && alcRaw >= METER_CAL.ALC.warn_raw;
+    if (show && hasRf) {
+      alcVal.textContent = alcPct + '%';
+      if (alcHint) alcHint.textContent = alcHot ? 'HIGH' : 'TX';
+      if (alcBadge) {
+        alcBadge.classList.toggle('hot', alcHot);
+        alcBadge.classList.toggle('tx', !alcHot);
+      }
+    } else if (tx) {
+      alcVal.textContent = '…';
+      if (alcHint) alcHint.textContent = 'TX';
+      if (alcBadge) { alcBadge.classList.add('tx'); alcBadge.classList.remove('hot'); }
+    } else {
+      alcVal.textContent = '—';
+      if (alcHint) alcHint.textContent = 'RX';
+      if (alcBadge) alcBadge.classList.remove('tx', 'hot');
+    }
+  }
+}
+
+// ── S-Meter canvas ─────────────────────────────────────────────────────
+function drawSMeter(raw) {
+  const canvas = document.getElementById('smeter-canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const cx = W / 2, cy = H * 0.9;
+  const R = Math.min(W * 0.48, H * 0.85);
+  const startA = Math.PI * 1.1;   // ~198°
+  const endA   = Math.PI * 1.9;   // ~342°
+  const span   = endA - startA;
+
+  // Position is raw against full scale, exactly like the panel's bar
+  // (MeterSpec.fraction). Ticks are placed THROUGH the curve
+  // (MeterSpec.tick_fraction), so the face is nonlinear the way a real
+  // S-meter's printed scale is: S1-S9 crowds the left, +60 stretches right.
+  const spec = SMETER_CAL;
+  const full = spec.full_raw > 0 ? spec.full_raw : 255;
+  const frac = (r) => Math.max(0, Math.min(1, (+r || 0) / full));
+  const angOf = (r) => startA + frac(r) * span;
+  const rawOfDb = (db) => calInterp(spec.cal, db, 1, 0);
+
+  const r0 = Math.max(0, Math.min(full, +raw || 0));
+  const s9Raw = rawOfDb(0);
+
+  // Background arc
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, startA, endA);
+  ctx.strokeStyle = '#2a5a2a';
+  ctx.lineWidth = 9;
+  ctx.stroke();
+
+  if (r0 > 0) {
+    const valAng = angOf(r0), s9Ang = angOf(s9Raw);
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, startA, Math.min(valAng, s9Ang));
+    ctx.strokeStyle = '#44ff77';
+    ctx.lineWidth = 9;
+    ctx.stroke();
+    if (r0 > s9Raw) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, s9Ang, valAng);
+      ctx.strokeStyle = '#ffaa33';
+      ctx.lineWidth = 9;
+      ctx.stroke();
+    }
+  }
+
+  // Needle
+  const needleAng = angOf(r0);
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + R * 0.78 * Math.cos(needleAng),
+             cy + R * 0.78 * Math.sin(needleAng));
+  ctx.strokeStyle = '#66ff66';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#66ff66';
+  ctx.fill();
+
+  // Scale marks, from the served ticks rather than a hand-placed list
+  ctx.font = 'bold 11px Consolas, monospace';
+  (spec.ticks || []).forEach((db) => {
+    const l = S_LABELS[String(db)];
+    if (!l) return;
+    const a = angOf(rawOfDb(db));
+    const major = (db === 0 || db === 60);
+    const r1 = R - (major ? 9 : 6);
+    const r2 = R + 1;
+    ctx.beginPath();
+    ctx.moveTo(cx + r1 * Math.cos(a), cy + r1 * Math.sin(a));
+    ctx.lineTo(cx + r2 * Math.cos(a), cy + r2 * Math.sin(a));
+    ctx.strokeStyle = db <= 0 ? '#66cc88' : '#cc8844';
+    ctx.lineWidth = major ? 2 : 1.2;
+    ctx.stroke();
+    const lr = R - 16;
+    ctx.fillStyle = db <= 0 ? '#88ffaa' : '#ffaa55';
+    ctx.textAlign = 'center';
+    ctx.fillText(l, cx + lr * Math.cos(a), cy + lr * Math.sin(a) + 3);
+  });
+
+  // S readout — meter_cal.s_label(): 6 dB per S-unit below S9, tens above.
+  const db = calInterp(spec.cal, r0, 0, 1);
+  let sText;
+  if (db >= 0) {
+    const over = Math.round(db / 10) * 10;
+    sText = over <= 0 ? 'S9' : `S9+${over}`;
+  } else {
+    sText = `S${Math.max(0, Math.round(9 + db / 6))}`;
+  }
+  ctx.font = 'bold 15px Consolas, monospace';
+  ctx.fillStyle = db > 0 ? '#ffaa33' : '#66ff66';
+  ctx.textAlign = 'center';
+  ctx.fillText(sText, cx, cy - R * 0.25);
+}
+
+// ── Frequency input ─────────────────────────────────────────────────────
+function freqClick() {
+  const disp = document.getElementById('freq-display');
+  const inp = document.getElementById('freq-in');
+  disp.style.display = 'none';
+  disp.dataset.editing = '1';
+  inp.style.display = 'inline-block';
+  inp.value = (state.freq_a / 1e6).toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+  inp.focus(); inp.select();
+}
+function freqKey(e) {
+  if (e.key === 'Enter') {
+    const inp = document.getElementById('freq-in');
+    const hz = parseFreqInput(inp.value.trim());
+    if (hz) {
+      state.freq_a = hz;
+      api('/api/freq', {hz});
+    }
+    freqCancel();
+  } else if (e.key === 'Escape') { freqCancel(); }
+}
+function freqCancel() {
+  const disp = document.getElementById('freq-display');
+  disp.style.display = '';
+  disp.dataset.editing = '0';
+  delete disp.dataset.digits; // force redraw
+  document.getElementById('freq-in').style.display = 'none';
+  renderFreqDisplay(state.freq_a);
+}
+function parseFreqInput(s) {
+  const n = parseFloat(s);
+  if (isNaN(n)) return null;
+  if (n < 100) return Math.round(n * 1e6);      // MHz (e.g. 14.2)
+  if (n < 100000) return Math.round(n * 1000);  // kHz (e.g. 14200)
+  return Math.round(n);                          // Hz
+}
+function tune(delta) {
+  const hz = Math.max(30000, Math.min(75000000, state.freq_a + delta));
+  state.freq_a = hz;
+  delete document.getElementById('freq-display').dataset.digits;
+  renderFreqDisplay(hz);
+  debounce('tune', () => api('/api/freq', {hz}), 80);
+}
+
+// Initial digit render
+renderFreqDisplay(state.freq_a);
+loadTxProfiles();
+
+// ── Button handlers ────────────────────────────────────────────────────
+function doConnect() {
+  const el = document.getElementById('port-in');
+  const port = el ? el.value.trim() : '';
+  if (!port) return;
+  api('/api/connect', {port, baud: 38400}).then(r => {
+    if (!r || !r.ok) alert('Could not connect to ' + port);
+  });
+}
+function doDisconnect() { api('/api/disconnect'); }
+
+// ── PTT: click-toggle normally; hold-to-talk when Remote TX is armed ────
+let _remoteTx = null;
+let _pttHold = false;
+// Optimistic UI while the server catches up: null = trust state.is_tx,
+// true/false = we just asked for that and haven't been confirmed yet.
+let _pttLocalTx = null;
+let _pttOptimisticTimer = null;
+let _pttPointerHandled = false; // pointerdown already keyed; ignore the click
+
+function updatePttButton() {
+  const ptt = document.getElementById('ptt-btn');
+  if (!ptt) return;
+  const armed = !!( _remoteTx && _remoteTx.isArmed );
+  const holding = _pttHold || (_remoteTx && _remoteTx.isPtt);
+  // Server caught up with what we asked for — stop overriding it
+  if (_pttLocalTx !== null && state.is_tx === _pttLocalTx) _pttLocalTx = null;
+  const keyed = _pttLocalTx !== null
+    ? _pttLocalTx
+    : (!!(state.is_tx && !state.tune_active) || (armed && holding));
+
+  ptt.classList.toggle('remote-armed', armed);
+  ptt.classList.toggle('on', keyed);
+  // Label
+  if (armed && holding) {
+    ptt.textContent = '● TX';
+  } else if (armed) {
+    ptt.textContent = 'PTT'; // CSS adds " · HOLD"
+  } else if (keyed) {
+    ptt.textContent = '● TX';
+  } else {
+    ptt.textContent = 'PTT';
+  }
+}
+
+let _txProfiles = [];
+let _txProfileId = 'phone';
+
+function _activeTxProfile() {
+  return _txProfiles.find(p => p.id === _txProfileId) || _txProfiles[0] ||
+    {id: 'phone', path: 'usb', gain: 0.65};
+}
+
+function renderTxProfiles() {
+  const sel = document.getElementById('tx-profile');
+  if (!sel) return;
+  sel.innerHTML = _txProfiles.map(p =>
+    `<option value="${p.id}"${p.id === _txProfileId ? ' selected' : ''}>${p.name}</option>`
+  ).join('');
+  const usb = (_activeTxProfile().path || 'usb') === 'usb';
+  const row = document.getElementById('tx-gain-row');
+  if (row) row.style.display = usb ? 'flex' : 'none';
+  const g = +(_activeTxProfile().gain || 1);
+  const sl = document.getElementById('tx-gain-sl');
+  const val = document.getElementById('tx-gain-val');
+  if (sl) sl.value = Math.round(g * 100);
+  if (val) val.textContent = g.toFixed(2);
+  if (_remoteTx && usb) { _remoteTx.setGain(g); if (_remoteTx.setProfile) _remoteTx.setProfile(_activeTxProfile()); }
+}
+
+function loadTxProfiles() {
+  fetch('/api/tx/profiles').then(r => r.json()).then(d => {
+    if (!d || !d.ok) return;
+    _txProfiles = d.profiles || [];
+    _txProfileId = d.active_id || 'phone';
+    renderTxProfiles();
+  }).catch(() => {});
+}
+
+function txProfileChanged() {
+  const sel = document.getElementById('tx-profile');
+  const id = sel && sel.value;
+  if (!id) return;
+  api('/api/tx/profile', {id}).then(d => {
+    if (!d || !d.ok) return;
+    _txProfiles = d.profiles || _txProfiles;
+    _txProfileId = d.active_id;
+    renderTxProfiles();
+    if (_activeTxProfile().path === 'front' && _remoteTx && _remoteTx.isArmed) {
+      _remoteTx.disarm();
+      updatePttButton();
+    }
+  });
+}
+
+let _txGainTimer = null;
+function txGainInput() {
+  const sl = document.getElementById('tx-gain-sl');
+  const val = document.getElementById('tx-gain-val');
+  const g = Math.max(0.1, Math.min(2.5, (Number(sl && sl.value) || 65) / 100));
+  if (val) val.textContent = g.toFixed(2);
+  if (_remoteTx) _remoteTx.setGain(g);
+  clearTimeout(_txGainTimer);
+  _txGainTimer = setTimeout(() => {
+    api('/api/tx/profile', {id: _txProfileId, gain: g}).then(d => {
+      if (d && d.ok) {
+        _txProfiles = d.profiles || _txProfiles;
+        _txProfileId = d.active_id || _txProfileId;
+      }
+    });
+  }, 250);
+}
+
+// Remote TX status was written only to #txarm-btn's title attribute, which
+// no touch device can ever show -- so an iPhone arm failure looked like the
+// button silently turning itself back off, with the reason invisible
+// (found 2026-08-28). Errors now hold on screen until dismissed by tap.
+let _txArmMsgTimer = null;
+function showTxArmMsg(msg, cls) {
+  const el = document.getElementById('txarm-msg');
+  if (!el) return;
+  clearTimeout(_txArmMsgTimer);
+  if (!msg) { el.className = ''; return; }
+  el.textContent = msg;
+  el.className = 'show ' + (cls || '');
+  if (cls !== 'err') {
+    _txArmMsgTimer = setTimeout(() => { el.className = ''; }, 4000);
+  }
+}
+(function bindTxArmMsg() {
+  const el = document.getElementById('txarm-msg');
+  if (el) el.addEventListener('click', () => { el.className = ''; });
+})();
+
+function _ensureRemoteTx() {
+  if (typeof RemoteTx === 'undefined') {
+    alert('Remote TX script not loaded — Ctrl+F5');
+    return null;
+  }
+  if (!_remoteTx) {
+    _remoteTx = new RemoteTx();
+    _remoteTx.onStatus((msg, cls, st) => {
+      const b = document.getElementById('txarm-btn');
+      if (b) {
+        b.classList.toggle('active-txarm', !!(st && st.armed));
+        b.textContent = (st && st.armed) ? '🎙 TX ARMED' : '🎙 REMOTE TX';
+        b.title = msg || '';
+      }
+      showTxArmMsg(msg, cls);
+      updatePttButton();
+    });
+  }
+  return _remoteTx;
+}
+
+function toggleRemoteTxArm() {
+  if ((_activeTxProfile().path || 'usb') === 'front') {
+    alert('Shack mic is the radio hand mic. Pick a remote mic profile, then arm Remote TX.');
+    return;
+  }
+  const rt = _ensureRemoteTx();
+  if (rt) rt.toggleArm().then(() => updatePttButton());
+}
+
+async function remoteTxTestTone() {
+  if ((_activeTxProfile().path || 'usb') === 'front') {
+    alert('Shack mic is the radio hand mic. Pick a remote mic profile.');
+    return;
+  }
+  const rt = _ensureRemoteTx();
+  if (!rt) return;
+  try {
+    await rt.testTone(2000);
+  } catch (e) {
+    alert('Test tone failed: ' + e);
+  }
+}
+
+function pttPointerDown(e) {
+  const ptt = document.getElementById('ptt-btn');
+  // Hold-to-talk only when remote TX is armed
+  if (_remoteTx && _remoteTx.isArmed) {
+    e.preventDefault();
+    e.stopPropagation();
+    _pttHold = true;
+    _pttLocalTx = true;
+    try {
+      ptt.setPointerCapture(e.pointerId);
+    } catch (_) {}
+    if (state.tune_active) {
+      api('/api/tune', { on: false });
+    }
+    updatePttButton(); // immediate ● TX — don't wait for server
+    _remoteTx.pttDown(true);
+    return;
+  }
+  // Local toggle: key on pointerdown, not on click. `click` only fires on
+  // release, so the whole press duration was dead time before the radio keyed.
+  if (e.button != null && e.button !== 0) return;
+  _pttPointerHandled = true;
+  togglePTT();
+}
+
+function pttPointerUp(e) {
+  if (_remoteTx && _remoteTx.isArmed && _pttHold) {
+    e.preventDefault();
+    e.stopPropagation();
+    _pttHold = false;
+    _pttLocalTx = null;
+    try {
+      if (e.pointerId != null) pttReleaseCaptureSafe(e);
+    } catch (_) {}
+    _remoteTx.pttDown(false);
+    updatePttButton();
+  }
+}
+
+function pttReleaseCaptureSafe(e) {
+  const ptt = document.getElementById('ptt-btn');
+  try { ptt.releasePointerCapture(e.pointerId); } catch (_) {}
+}
+
+function pttClick(e) {
+  // Remote hold mode: ignore click (pointerdown/up own it)
+  if (_remoteTx && _remoteTx.isArmed) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (_pttPointerHandled) { _pttPointerHandled = false; return; }
+  togglePTT(); // keyboard / synthetic activation only
+}
+
+function togglePTT() {
+  if (state.tune_active) {
+    api('/api/ptt', { tx: false });
+    return;
+  }
+  if (_remoteTx && _remoteTx.isArmed) {
+    // Should not be used in hold mode; ignore
+    return;
+  }
+  const want = !(_pttLocalTx !== null ? _pttLocalTx : state.is_tx);
+  _pttLocalTx = want;
+  clearTimeout(_pttOptimisticTimer);
+  // If the server never confirms, stop lying about it
+  _pttOptimisticTimer = setTimeout(() => {
+    _pttLocalTx = null;
+    updatePttButton();
+  }, 2000);
+  updatePttButton();
+  api('/api/ptt', { tx: want });
+  // Coming back to RX: re-anchor the audio player rather than let it stack or
+  // drop the first chunks after the radio unmutes.
+  if (!want && _lanAudio) { try { _lanAudio.resync(); } catch (_) {} }
+}
+
+// Bind once — pointer events beat mouse+touch races
+(function bindPtt() {
+  const ptt = document.getElementById('ptt-btn');
+  if (!ptt || ptt.dataset.bound) return;
+  ptt.dataset.bound = '1';
+  ptt.addEventListener('pointerdown', pttPointerDown);
+  ptt.addEventListener('pointerup', pttPointerUp);
+  ptt.addEventListener('pointercancel', pttPointerUp);
+  // Do NOT unkey on pointerleave — capture handles drag-off
+  ptt.addEventListener('click', pttClick);
+})();
+
+function openWaterfall() {
+  const w = Math.min(1100, screen.availWidth - 40);
+  const h = Math.min(700, screen.availHeight - 80);
+  window.open('/waterfall', 'cyberrig-waterfall',
+    `width=${w},height=${h},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=no`);
+}
+
+// The FT8 page is a SEPARATE PROCESS on port 8010, not an in-process route
+// like /freedv and /sstv -- it deliberately does not share the panel's
+// lifetime, because restarting the panel takes the operator's CAT down with it.
+//
+// Two ways in, depending on how this page was reached. Behind a reverse proxy
+// there is no port here and `/ft8/*` is expected to proxy to 8010 with the
+// prefix stripped, so a same-origin path is correct and keeps TLS. Reached
+// directly there IS a port, so swap it. The FT8 page derives the same prefix
+// from its own URL.
+function ft8Url() {
+  return location.port
+    ? location.protocol + '//' + location.hostname + ':8010/'
+    : '/ft8/';
+}
+function openFt8() { location.href = ft8Url(); }
+
+function openEq() {
+  const w = Math.min(560, screen.availWidth - 40);
+  const h = Math.min(760, screen.availHeight - 80);
+  window.open('/eq', 'cyberrig-eq',
+    `width=${w},height=${h},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
+}
+
+function openMacrosEditor() {
+  const w = Math.min(700, screen.availWidth - 40);
+  const h = Math.min(800, screen.availHeight - 80);
+  window.open('/macros-editor', 'cyberrig-macros',
+    `width=${w},height=${h},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
+}
+
+function openMemories() {
+  const w = Math.min(700, screen.availWidth - 40);
+  const h = Math.min(800, screen.availHeight - 80);
+  window.open('/memories', 'cyberrig-memories',
+    `width=${w},height=${h},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`);
+}
+
+// LAN RX audio (FTDX10 USB → WebSocket PCM → Web Audio)
+let _lanAudio = null;
+function toggleLanAudio() {
+  if (!_lanAudio) {
+    if (typeof LanAudioPlayer === 'undefined') {
+      alert('Audio player not loaded — hard-refresh (Ctrl+F5)');
+      return;
+    }
+    _lanAudio = new LanAudioPlayer();
+    window._lanAudio = _lanAudio;
+    _lanAudio.onStatus((msg, cls) => {
+      const b = document.getElementById('listen-btn');
+      if (!b) return;
+      b.classList.toggle('active-listen', _lanAudio.isPlaying);
+      b.textContent = _lanAudio.isPlaying ? '🎧 ON' : '🎧 LISTEN';
+      b.title = msg || 'Stream FTDX10 RX audio over your LAN/VPN';
+    });
+  }
+  _lanAudio.toggle();
+}
+
+async function toggleRemoteTune() {
+  const on = !state.tune_active;
+  // Optimistic UI
+  state.tune_active = on;
+  updateUI();
+  try {
+    const r = await fetch('/api/tune', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({on, watts: state.tune_watts || 20})
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      state.tune_active = false;
+      updateUI();
+      alert(j.error || 'TUNE failed');
+    }
+  } catch (e) {
+    state.tune_active = false;
+    updateUI();
+  }
+}
+
+function toggleRadioPower() {
+  const on = !state.radio_on;
+  if (!on && !confirm('Turn off the radio\'s main power? (CyberRig stays connected — use this button again to power it back on.)')) return;
+  state.radio_on = on;
+  updateUI();
+  api('/api/radio_power', {on});
+}
+
+function toggleATU() {
+  const on = !state.atu;
+  state.atu = on;
+  if (!on) state.atu_tuning = false;
+  updateUI();
+  api('/api/atu', {on});
+}
+
+// ── WSPR mode ────────────────────────────────────────────────────────
+// Renders from /api/state, so the panel, this page and a phone all show the
+// same phase — there is one WsprAutoTune behind them, not three UIs guessing.
+function renderWspr(w) {
+  const btn = document.getElementById('wspr-btn');
+  if (!btn) return;
+  w = w || {armed: false, phase: 'idle'};
+  const lbl = document.getElementById('wspr-label');
+  const sub = document.getElementById('wspr-sub');
+  const det = document.getElementById('wspr-detail');
+  const acts = document.getElementById('wspr-actions');
+  const stats = document.getElementById('wspr-stats');
+  const hold = w.hold || null;
+  const phase = w.phase || 'idle';
+
+  btn.classList.toggle('armed', !!w.armed && phase === 'idle');
+  btn.classList.toggle('tuning', phase === 'tuning');
+  btn.classList.toggle('hold', phase === 'hold');
+  btn.classList.toggle('stopped', phase === 'stopped');
+
+  if (!w.armed) {
+    lbl.textContent = 'WSPR AUTO-TUNE';
+    sub.textContent = 'disarmed · JTDX band hops do not tune';
+  } else if (phase === 'tuning') {
+    lbl.textContent = '◐ TUNING ' + (w.band || '');
+    sub.textContent = 'carrier off the WSPR window · beacons refused';
+  } else if (phase === 'hold') {
+    lbl.textContent = '! HELD ON ' + (w.band || '?');
+    sub.textContent = 'not transmitting · tap to disarm';
+  } else if (phase === 'stopped') {
+    lbl.textContent = '!! HARD STOP';
+    sub.textContent = 'no further transmission until resumed';
+  } else {
+    lbl.textContent = '● WSPR ARMED';
+    const swr = (w.last_tune && w.last_tune.swr) ? ' · last tune SWR ' + w.last_tune.swr : '';
+    sub.textContent = (w.band || 'no band') + swr + ' · tap to disarm';
+  }
+
+  if (hold) {
+    det.style.display = 'block';
+    det.textContent = hold.detail || '';
+    det.classList.toggle('urgent', !!hold.urgent);
+  } else {
+    det.style.display = 'none';
+  }
+
+  // CLEAR and RESUME are separate on purpose: a hard stop means the watchdog
+  // fired repeatedly, and that deserves a look at the antenna, not a tap.
+  const showClear = phase === 'hold', showStop = phase === 'stopped';
+  acts.style.display = (showClear || showStop) ? 'flex' : 'none';
+  document.getElementById('wspr-clear').style.display = showClear ? 'block' : 'none';
+  document.getElementById('wspr-resume').style.display = showStop ? 'block' : 'none';
+
+  let warn = document.getElementById('wspr-noclient');
+  if (!warn) {
+    warn = document.createElement('div');
+    warn.id = 'wspr-noclient';
+    warn.style.cssText = 'display:none;margin-top:6px;padding:6px 8px;'
+      + 'border:1px solid #ff8c1a;color:#ff8c1a;background:rgba(255,140,26,.08);'
+      + 'font:600 11px/1.35 ui-monospace,monospace;letter-spacing:.02em;';
+    stats.parentNode.insertBefore(warn, stats.nextSibling);
+  }
+
+  if (w.armed) {
+    const bits = [];
+    bits.push((w.tunes || 0) + ' tunes');
+    if (w.skipped_beacons) bits.push(w.skipped_beacons + ' beacons skipped');
+    if (w.trips) bits.push(w.trips + ' trips');
+    const th = w.thresholds || {};
+    if (th.swr_trip) bits.push('trip SWR ' + th.swr_trip);
+    stats.textContent = bits.join(' · ');
+
+    // Armed with no CAT client attached: nothing can key a beacon, and that
+    // looks exactly like a dead band from every other indicator. On
+    // 2026-09-04 it hid for 8h51m. This is the one WSPR state that is worth
+    // shouting about while the radio is doing nothing at all.
+    const gone = w.client_gone_s || 0;
+    if (!w.rigctl_clients && gone > 60) {
+      const mins = Math.round(gone / 60);
+      warn.textContent = 'NO CAT CLIENT for ' + mins + ' min — no beacon can key. '
+                       + 'Check JTDX for a rig control error and hit Retry.';
+      warn.style.display = 'block';
+    } else {
+      warn.style.display = 'none';
+    }
+  } else {
+    stats.textContent = '';
+    warn.style.display = 'none';
+  }
+}
+
+async function toggleWspr() {
+  const on = !(state.wspr && state.wspr.armed);
+  const r = await api('/api/wspr', {on});
+  if (r && r.ok === false && r.error) alert(r.error);
+  if (r) { state.wspr = r; renderWspr(r); }
+}
+
+async function wsprClear() {
+  const r = await api('/api/wspr/clear', {});
+  if (r) { state.wspr = r; renderWspr(r); }
+}
+
+async function wsprResume() {
+  const r = await api('/api/wspr/resume', {});
+  if (r) { state.wspr = r; renderWspr(r); }
+}
+
+async function atuTune() {
+  // Optimistic: starting if idle, aborting if already tuning
+  state.atu_tuning = !state.atu_tuning;
+  if (state.atu_tuning) state.atu = true;
+  updateUI();
+  try {
+    const r = await fetch('/api/atu/tune', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: '{}'
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      state.atu_tuning = false;
+      updateUI();
+      alert(j.error || 'Internal ATU TUNE failed');
+      return;
+    }
+    if (j.atu != null) state.atu = j.atu;
+    if (j.atu_tuning != null) state.atu_tuning = j.atu_tuning;
+    updateUI();
+  } catch (e) {
+    state.atu_tuning = false;
+    updateUI();
+  }
+}
+
+function toggleNB()   { api('/api/nb', {on: !state.nb, level: state.nb_level}); }
+function toggleNR()   { api('/api/nr', {on: !state.nr, level: state.nr_level}); }
+function toggleDNF()  { api('/api/dnf', {on: !state.dnf}); }
+function toggleNotch(){ api('/api/notch', {on: !state.notch, hz: state.notch_pos}); }
+function toggleContour(){ api('/api/contour', {on: !state.contour}); }
+function toggleAPF()  { api('/api/apf', {on: !state.apf}); }
+function toggleComp() { api('/api/compressor', {on: !state.compressor, level: state.comp_level}); }
+function toggleVOX()  { api('/api/vox', {on: !state.vox, gain: state.vox_gain}); }
+function toggleMon()  { api('/api/monitor', {on: !state.monitor, level: state.mon_level}); }
+function toggleSplit(){ api('/api/split', {on: !state.split, tx_vfo: state.tx_vfo}); }
+function toggleRIT()  { api('/api/rit', {on: !state.rit}); }
+function toggleXIT()  { api('/api/xit', {on: !state.xit}); }
+function toggleBI()   { api('/api/cw_breakin', {on: !state.cw_breakin}); }
+
+function setAGC(mode) { api('/api/agc', {mode}); }
+
+// Approx SH table (SSB) for instant label; server confirms via state.sh_hz
+const SH_HZ_SSB = [0,300,400,600,850,1100,1200,1500,1650,1800,1950,2100,2250,2400,
+  2450,2500,2600,2700,2800,2900,3000,3200,3500,4000];
+const SH_HZ_CW = [0,50,100,150,200,250,300,350,400,450,500,600,800,1200,1400,1700,
+  2000,2400,3000,3200,3500,4000];
+function shHzLocal(code) {
+  const m = (state.mode || 'USB').toUpperCase();
+  const t = (m.includes('CW')) ? SH_HZ_CW : SH_HZ_SSB;
+  return t[Math.min(+code, t.length - 1)] || 0;
+}
+function shChange() {
+  const code = +document.getElementById('sh-sl').value;
+  state.sh = code;
+  state.sh_hz = shHzLocal(code);
+  document.getElementById('sh-val').textContent = state.sh_hz + ' Hz';
+  debounce('sh', () => api('/api/sh', {code}).then(r => {
+    if (r && r.sh_hz != null) {
+      state.sh = r.sh;
+      state.sh_hz = r.sh_hz;
+      document.getElementById('sh-val').textContent = r.sh_hz + ' Hz';
+    }
+  }), 60);
+}
+function ifsChange() {
+  const hz = +document.getElementById('ifs-sl').value;
+  document.getElementById('ifs-val').textContent = hz + ' Hz';
+  debounce('ifs', () => api('/api/if_shift', {hz}));
+}
+function notchFreqChange() {
+  const hz = +document.getElementById('notch-sl').value;
+  document.getElementById('notch-val').textContent = hz + ' Hz';
+  debounce('notch-f', () => api('/api/notch_freq', {hz}));
+}
+function ctrFreqChange() {
+  const hz = +document.getElementById('ctr-sl').value;
+  document.getElementById('ctr-val').textContent = hz + ' Hz';
+  debounce('ctr-f', () => api('/api/contour_freq', {hz}));
+}
+function ctrLevelChange() {
+  const val = +document.getElementById('ctr-lvl-sl').value;
+  document.getElementById('ctr-lvl-val').textContent = val;
+  debounce('ctr-l', () => api('/api/contour_level', {val}));
+}
+function ctrWidthChange() {
+  const val = +document.getElementById('ctr-wid-sl').value;
+  document.getElementById('ctr-wid-val').textContent = val;
+  debounce('ctr-w', () => api('/api/contour_width', {val}));
+}
+
+// ── CW ─────────────────────────────────────────────────────────────────
+function cwSend() {
+  const text = document.getElementById('cw-input').value.trim();
+  if (text) api('/api/cw_send', {text});
+}
+document.getElementById('cw-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') cwSend();
+});
+function cwQuick(type) {
+  const msgs = {
+    cq: `CQ CQ CQ DE ${callsign} ${callsign} K`,
+    '73': `73 DE ${callsign}`,
+    tu: `TU 73 DE ${callsign}`
+  };
+  const text = msgs[type];
+  document.getElementById('cw-input').value = text;
+  api('/api/cw_send', {text});
+}
+
+// ── Init ───────────────────────────────────────────────────────────────
+buildModeButtons();
+buildBandButtons();
+buildMacroButtons();
+buildHyperMemButtons();
+loadHyperMem();
+window.addEventListener('focus', loadHyperMem);
+updateUI();
+loadMeterCal();
+connectWS();
+
+// PWA — installable home-screen app (shell only; CAT always live)
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/service-worker.js', { scope: '/' }).catch(() => {});
+}
+</script>
+</body>
+</html>

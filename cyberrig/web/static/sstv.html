@@ -1,0 +1,1414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CyberRig — SSTV</title>
+<meta name="theme-color" content="#0b140b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+<link rel="stylesheet" href="/static/fonts.css">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #060b06; --panel: #0b140b; --border: #2a5a2a;
+  --green: #33ff99; --gdim: #66cc88; --gbright: #66ff66;
+  --orange: #ffaa33; --red: #ff4444; --blue: #44bbff;
+}
+:root {
+  --wx-font: 'Share Tech Mono', Consolas, ui-monospace, monospace;
+  --wx-font-display: 'VT323', 'Share Tech Mono', monospace;
+  --wx-font-copy: 'Rajdhani', 'Share Tech Mono', sans-serif;
+}
+html, body {
+  height: 100%; height: 100dvh; background: var(--bg); color: var(--green);
+  font-family: var(--wx-font);
+  /* Share Tech Mono runs small and is a single weight; size up and stop
+     asking for a bold that does not exist. */
+  font-size: 17px; font-weight: 400; letter-spacing: .3px;
+}
+body {
+  display: flex; flex-direction: column; height: 100%; overflow: hidden;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+#bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 12px; background: #050c05; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.logo {
+  font-family: var(--wx-font-display); font-size: 27px; line-height: 1;
+  letter-spacing: 2px; color: var(--gbright);
+  text-shadow: 0 0 10px rgba(51,255,153,.45);
+}
+.spacer { flex: 1; }
+button, select, input[type=file] {
+  font-family: var(--wx-font); font-weight: 400; font-size: 15px;
+  background: var(--panel); color: var(--green); border: 1px solid var(--border);
+  padding: 8px 12px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;
+}
+button:hover:not(:disabled) { border-color: var(--gbright); color: var(--gbright); }
+button:disabled { opacity: .4; cursor: not-allowed; }
+button.on { background: #003355; border-color: var(--blue); color: var(--blue); }
+button.live { background: #3a2000; border-color: var(--orange); color: var(--orange); }
+button.listen-on { background: #003355; border-color: var(--blue); color: var(--blue); }
+/* Remote autotuner (MFJ) carrier — NOT the FTDX10 internal ATU. */
+#rtune.on {
+  background: #3a2000; border-color: var(--orange); color: var(--orange);
+  box-shadow: 0 0 14px #ff8800aa; animation: rtune-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rtune-pulse { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
+/* Internal FTDX10 ATU (CAT AC) — a different tuner from REMOTE TUNE. */
+#atu.on { background: #003355; border-color: var(--blue); color: var(--blue); }
+#atutune.tuning {
+  background: #3a2000; border-color: var(--orange); color: var(--orange);
+  animation: rtune-pulse 1.0s ease-in-out infinite;
+}
+#listen-vol {
+  width: 90px; accent-color: #44bbff; vertical-align: middle;
+}
+#status { flex: 1 1 100%; font-size: 13px; color: var(--gdim); min-height: 1.2em; }
+#status.err { color: var(--red); }
+#status.live { color: var(--gbright); }
+.lamp {
+  border: 1px solid var(--border); padding: 6px 10px; font-size: 12px;
+  letter-spacing: 1px; background: var(--panel);
+}
+.lamp.rx { border-color: var(--gbright); color: var(--gbright); }
+.lamp.tx { border-color: var(--red); color: var(--red); background: #3a0000; }
+
+#main {
+  flex: 1; display: grid; grid-template-columns: 1fr; gap: 12px;
+  padding: 12px; overflow-y: auto; align-content: start;
+}
+@media (min-width: 900px) { #main { grid-template-columns: minmax(0,1fr) 340px; } }
+
+/* SSTV pixels are not square: every mode is displayed 4:3 whatever its
+   pixel count, so the preview box is 4:3 and the canvas stretches into it. */
+#stage {
+  background: #050c05; border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  padding: 10px; min-height: 220px;
+}
+#wrap { position: relative; width: 100%; max-width: 760px; aspect-ratio: 4 / 3; }
+#preview {
+  width: 100%; height: 100%; display: block; background: #000;
+  touch-action: none; cursor: grab;
+}
+#wrap.empty #preview { cursor: default; }
+#wrap.sending #preview { cursor: default; }
+#drop {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; text-align: center; font-size: 13px;
+  color: var(--gdim); pointer-events: none; padding: 20px; line-height: 1.6;
+}
+#wrap:not(.empty) #drop { display: none; }
+#wrap.over { outline: 2px dashed var(--gbright); outline-offset: -6px; }
+#sweep {
+  position: absolute; left: 0; right: 0; top: 0; background: rgba(0,0,0,.62);
+  pointer-events: none; height: 0; border-bottom: 1px solid var(--orange);
+}
+
+.card { border: 1px solid var(--border); background: var(--panel); }
+.card h2 {
+  font-size: 12px; letter-spacing: 2px; color: var(--gdim); font-weight: 700;
+  padding: 8px 10px; border-bottom: 1px solid var(--border); text-transform: uppercase;
+}
+.card .body { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.row > * { flex: 0 0 auto; }
+label { font-size: 12px; color: var(--gdim); letter-spacing: 1px; }
+select { width: 100%; }
+input[type=range] { width: 100%; accent-color: #33ff99; }
+.hint { font-family: var(--wx-font-copy); font-size: 14px; color: var(--gdim); line-height: 1.5; }
+.hint.warn { color: var(--orange); }
+.side { display: flex; flex-direction: column; gap: 12px; }
+
+.meters { display: grid; grid-template-columns: 40px 1fr 54px; gap: 5px 8px; align-items: center; }
+.meters .lbl { font-size: 12px; color: var(--gdim); letter-spacing: 1px; }
+/* div.bar / div.fill (not span): inline spans ignore width, so numbers
+   moved while the bars stayed empty. Same pattern as freedv.html. */
+.meters .bar {
+  height: 10px; background: #050c05; border: 1px solid var(--border);
+  position: relative; overflow: hidden;
+}
+.meters .fill { display: block; height: 100%; background: var(--gbright); width: 0%; }
+.meters .fill.hot { background: var(--red); }
+.meters .num {
+  font-family: var(--wx-font-display); font-size: 17px; line-height: 1;
+  text-align: right; color: var(--gbright);
+}
+
+#dock {
+  padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border); background: #050c05; flex-shrink: 0;
+}
+#dockinner { max-width: 940px; margin: 0 auto; }
+#send {
+  width: 100%; height: 76px; font-family: var(--wx-font-display);
+  font-size: 27px; letter-spacing: 3px;
+  border-width: 2px; position: relative; overflow: hidden;
+}
+#send .fill {
+  position: absolute; inset: 0 auto 0 0; width: 0%; background: #3a0000;
+  border-right: 2px solid var(--red); z-index: 0;
+}
+#send .txt { position: relative; z-index: 1; }
+#send.sending { border-color: var(--red); color: var(--red); }
+#abort {
+  width: 100%; height: 56px; font-family: var(--wx-font-display);
+  font-size: 24px; letter-spacing: 3px; margin-top: 8px;
+  background: #3a0000; border: 2px solid var(--red); color: var(--red);
+}
+#abort[hidden] { display: none; }
+
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* Wrap rather than scroll: a hidden horizontal scroller in a 340px column
+   means half the templates are never discovered. */
+#tstrip { display: flex; flex-wrap: wrap; gap: 8px; }
+.tcard {
+  flex: 0 0 auto; border: 1px solid var(--border); background: #050c05;
+  padding: 4px; cursor: pointer; text-align: center;
+}
+.tcard.sel { border-color: var(--gbright); }
+.tcard canvas { display: block; width: 96px; height: 72px; background: #000; }
+.tcard span {
+  display: block; font-size: 10px; letter-spacing: 1px; color: var(--gdim);
+  margin-top: 3px; max-width: 96px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tcard.sel span { color: var(--gbright); }
+
+#props { border: 1px solid var(--border); background: var(--panel); padding: 10px; }
+#props[hidden] { display: none; }
+#props .row { margin-bottom: 8px; }
+#props .row:last-child { margin-bottom: 0; }
+#props input[type=text] {
+  flex: 1 1 160px; min-width: 0; font-family: inherit; font-weight: 700;
+  font-size: 13px; background: #050c05; color: var(--green);
+  border: 1px solid var(--border); padding: 7px 9px;
+}
+#props input[type=color] {
+  width: 38px; height: 32px; padding: 0; background: none;
+  border: 1px solid var(--border); cursor: pointer;
+}
+#props input[type=range] { flex: 1 1 120px; width: auto; }
+#props button { padding: 7px 10px; }
+#props button.danger { border-color: #6a2222; color: var(--red); }
+.qso input {
+  flex: 1 1 90px; min-width: 0; font-family: inherit; font-weight: 700;
+  font-size: 13px; background: #050c05; color: var(--green);
+  border: 1px solid var(--border); padding: 7px 9px; text-transform: uppercase;
+}
+#tabs { display: flex; gap: 8px; }
+#tabs button.sel { background: #003355; border-color: var(--blue); color: var(--blue); }
+/* #main sets display:grid explicitly, which outranks the browser's default
+   [hidden] rule — the TX pane stayed visible underneath the others. */
+.pane[hidden], #main[hidden] { display: none; }
+#rxwrap {
+  position: relative; width: 100%; max-width: 760px; aspect-ratio: 4 / 3;
+  background: #000; border: 1px solid var(--border);
+}
+#rxcv { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+#rxnote {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; color: var(--gdim); font-size: 14px; text-align: center;
+}
+#rxwrap.live #rxnote { display: none; }
+#tune { width: 100%; height: 54px; display: block; background: #050c05; border: 1px solid var(--border); }
+#gal { display: flex; flex-wrap: wrap; gap: 8px; }
+.gcard { flex: 0 0 auto; border: 1px solid var(--border); background: #050c05; padding: 4px; }
+.gcard img { display: block; width: 128px; height: 96px; object-fit: cover; background: #000; }
+.gcard span { display: block; font-size: 11px; color: var(--gdim); margin-top: 3px; max-width: 128px; }
+.gcard button { padding: 3px 6px; font-size: 11px; margin-top: 3px; width: 100%; }
+.macros { font-family: var(--wx-font-copy); font-size: 13px; color: var(--gdim); line-height: 1.6; }
+.macros code { color: var(--gbright); }
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <span class="logo">CYBERRIG SSTV</span>
+  <button id="enter">ENTER</button>
+  <button id="rtune" title="Keys a low-power AM carrier for the remote autotuner (MFJ). Not the FTDX10 internal ATU.">REMOTE TUNE</button>
+  <button id="atu" title="FTDX10 internal antenna tuner in line or bypassed (CAT AC001/AC000)">ATU</button>
+  <button id="atutune" title="Run the internal ATU match cycle (CAT AC002). Keys the radio briefly.">ATU TUNE</button>
+  <button id="listen" title="Stream FTDX10 RX audio over your LAN/VPN">🎧 LISTEN</button>
+  <input id="listen-vol" type="range" min="5" max="300" value="100"
+         title="Listen volume" aria-label="Listen volume">
+  <span style="font-size:12px;letter-spacing:1px;color:var(--gdim)">RFG</span>
+  <input id="rf-sl" type="range" min="0" max="255" step="1" value="200"
+         style="width:90px" title="RF gain" aria-label="RF gain" oninput="onRfGain(this.value)">
+  <span class="lamp" id="rf-val">200</span>
+  <span class="lamp" id="lamp">IDLE</span>
+  <span class="lamp" id="freq">—</span>
+  <span id="tabs">
+    <button id="tab-tx" class="sel">TX</button>
+    <button id="tab-rx">RX</button>
+    <button id="tab-gal">GALLERY</button>
+  </span>
+  <span class="spacer"></span>
+  <button onclick="location.href='/'">RIG</button>
+  <div id="status">checking…</div>
+</div>
+
+<div id="main" class="pane" data-pane="tx">
+  <div class="col">
+  <div id="stage">
+    <div id="wrap" class="empty">
+      <canvas id="preview" width="320" height="256"></canvas>
+      <div id="drop"><div>
+        DROP AN IMAGE HERE<br>
+        or paste, or use PICK IMAGE<br>
+        <span style="opacity:.7">drag to reframe · scroll or pinch to zoom</span>
+      </div></div>
+      <div id="sweep"></div>
+    </div>
+  </div>
+
+  <div id="props" hidden>
+    <div class="row">
+      <label id="pkind">TEXT</label>
+      <span class="spacer"></span>
+      <button id="p-back">SEND BACK</button>
+      <button id="p-del" class="danger">DELETE</button>
+    </div>
+    <div class="row" id="p-textrow">
+      <input type="text" id="p-text" placeholder="text or {macro}">
+    </div>
+    <div class="row">
+      <label>SIZE</label><input type="range" id="p-size" min="2" max="30" step="1">
+      <input type="color" id="p-color">
+      <button id="p-align">LEFT</button>
+      <button id="p-font">MONO</button>
+    </div>
+    <div class="row"><span class="hint">Drag on the picture to move it.</span></div>
+  </div>
+  </div>
+
+  <div class="side">
+    <div class="card">
+      <h2>Source</h2>
+      <div class="body">
+        <div class="row">
+          <button id="pick">PICK IMAGE</button>
+          <button id="reset" disabled>RE-FIT</button>
+        </div>
+        <input type="file" id="file" accept="image/*" hidden>
+        <div class="hint" id="srcinfo">No image loaded.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Template</h2>
+      <div class="body">
+        <div id="tstrip"></div>
+        <div class="row">
+          <button id="t-addtext">+ TEXT</button>
+          <button id="t-addbox">+ BOX</button>
+          <button id="t-save">SAVE AS…</button>
+          <button id="t-del" class="danger" disabled>DELETE</button>
+        </div>
+        <div class="macros" id="macrohelp"></div>
+      </div>
+    </div>
+
+    <div class="card qso">
+      <h2>QSO</h2>
+      <div class="body">
+        <div class="row">
+          <input id="q-call" placeholder="THEIR CALL" autocomplete="off">
+          <input id="q-rst" placeholder="RST" value="59" autocomplete="off">
+        </div>
+        <div class="hint">Fills <code>{call}</code> and <code>{rst}</code>.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Mode</h2>
+      <div class="body">
+        <select id="mode"></select>
+        <div class="hint" id="modeinfo">—</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Drive</h2>
+      <div class="body">
+        <label>TX LEVEL <span id="lvlval">0.010</span> <span id="lvldb" class="hint" style="opacity:.7"></span></label>
+        <input type="range" id="level" min="0.005" max="1" step="0.005" value="0.01">
+        <div class="meters">
+          <span class="lbl">PO</span><div class="bar"><div class="fill" id="po-f"></div></div><span class="num" id="po-n">—</span>
+          <span class="lbl">ALC</span><div class="bar"><div class="fill" id="alc-f"></div></div><span class="num" id="alc-n">—</span>
+          <span class="lbl">SWR</span><div class="bar"><div class="fill" id="swr-f"></div></div><span class="num" id="swr-n">—</span>
+        </div>
+        <div class="hint">Leave PO well above your target and set the output
+          here: ALC should read <b>zero</b>, not "just barely moving". Above
+          the ALC knee the radio limits instead of this slider and the leader
+          transient lands in the VIS header.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="rxpane" class="pane" hidden style="flex:1;overflow-y:auto;padding:12px;">
+  <div class="col" style="max-width:780px;margin:0 auto;">
+    <div id="rxwrap">
+      <canvas id="rxcv" width="320" height="256"></canvas>
+      <div id="rxnote">Nothing arriving.<br>ENTER SSTV and the receiver listens
+        for a header on its own.</div>
+    </div>
+    <div class="card">
+      <h2>Tuning</h2>
+      <div class="body">
+        <canvas id="tune" width="560" height="54"></canvas>
+        <div class="row">
+          <span class="lamp" id="tune-off">—</span>
+          <span class="hint" style="flex:1 1 200px">Sync is 1200 Hz by
+            definition, so the marker offset is your tuning error. Dial it out
+            on the rig and the peaks line up with the ticks.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Reception</h2>
+      <div class="body">
+        <div class="row">
+          <span class="lamp" id="rx-mode">—</span>
+          <span class="lamp" id="rx-lines">—</span>
+          <span class="lamp" id="rx-snr">—</span>
+          <span class="lamp" id="rx-slant">—</span>
+        </div>
+        <div class="hint">Pictures save themselves when they finish, and a
+          transmission that gets stepped on still keeps what arrived.</div>
+      </div>
+    </div>
+
+    <div class="card" id="adjcard">
+      <h2>Straighten the last picture</h2>
+      <div class="body">
+        <div class="row">
+          <label>SLANT</label>
+          <input type="range" id="adj-slant" min="-4000" max="4000" step="10" value="0">
+          <span class="lamp" id="adj-val">0 ppm</span>
+        </div>
+        <div class="row">
+          <label>SHIFT</label>
+          <input type="range" id="adj-shift" min="-40" max="40" step="0.5" value="0">
+          <span class="lamp" id="adj-shiftval">0.0 ms</span>
+        </div>
+        <div class="row">
+          <button id="adj-auto">AUTO</button>
+          <button id="adj-save">SAVE CORRECTED</button>
+          <span class="spacer"></span>
+          <button id="adj-back" title="Put this picture into the next
+            transmission so they can see how their signal landed">SEND BACK</button>
+          <button id="adj-show">VIEW</button>
+        </div>
+        <div class="hint" id="adj-note">Nothing received yet this session.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="galpane" class="pane" hidden style="flex:1;overflow-y:auto;padding:12px;">
+  <div class="card" style="max-width:980px;margin:0 auto;">
+    <h2>Received</h2>
+    <div class="body"><div id="gal"></div>
+      <div class="hint" id="galnote">Nothing received yet.</div></div>
+  </div>
+</div>
+
+<div id="dock"><div id="dockinner">
+  <button id="send" disabled><span class="fill" id="sendfill"></span><span class="txt" id="sendtxt">LOAD AN IMAGE</span></button>
+  <button id="abort" hidden>ABORT — DROP RF NOW</button>
+</div></div>
+
+<script src="/static/lan-audio.js"></script>
+<script>
+let st = {};
+let modes = [];
+let mode = null;
+let src = null;            // HTMLImageElement
+let view = { scale: 1, x: 0, y: 0 };
+let poll = null;
+let lastMacros = '';
+let lastSavedId = null;
+let lanAudio = null;
+
+const $ = (id) => document.getElementById(id);
+const cv = $('preview');
+const ctx = cv.getContext('2d');
+
+function setStatus(t, cls) { const e = $('status'); e.textContent = t; e.className = cls || ''; }
+
+function paintListen() {
+  const b = $('listen');
+  if (!b) return;
+  const on = !!(lanAudio && lanAudio.isPlaying);
+  b.classList.toggle('listen-on', on);
+  b.textContent = on ? '🎧 ON' : '🎧 LISTEN';
+}
+
+function toggleListen() {
+  if (typeof LanAudioPlayer === 'undefined') {
+    setStatus('Audio player not loaded — hard-refresh (Ctrl+F5)', 'err');
+    return;
+  }
+  if (!lanAudio) {
+    lanAudio = new LanAudioPlayer();
+    lanAudio.onStatus((msg, cls) => {
+      paintListen();
+      if (cls === 'err') setStatus(msg || 'audio error', 'err');
+      else if (lanAudio && lanAudio.isPlaying) setStatus(msg || 'listening', 'live');
+      $('listen').title = msg || 'Stream FTDX10 RX audio over your LAN/VPN';
+    });
+  }
+  lanAudio.toggle();
+  paintListen();
+}
+
+$('listen').onclick = () => toggleListen();
+$('listen-vol').oninput = () => {
+  if (lanAudio) lanAudio.setGain(+$('listen-vol').value / 100);
+};
+
+async function api(path, body) {
+  const opt = body === undefined
+    ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  return await r.json();
+}
+
+// ── image + framing ──────────────────────────────────────────────────────
+// The canvas backing store is the mode's real pixel grid; CSS shows it at 4:3.
+// What you see is exactly what gets encoded.
+
+function fitCover() {
+  if (!src) return;
+  const s = Math.max(cv.width / src.width, cv.height / src.height);
+  view = { scale: s, x: (cv.width - src.width * s) / 2, y: (cv.height - src.height * s) / 2 };
+}
+
+function clampView() {
+  if (!src) return;
+  const w = src.width * view.scale, h = src.height * view.scale;
+  if (w >= cv.width) view.x = Math.min(0, Math.max(cv.width - w, view.x));
+  else view.x = (cv.width - w) / 2;
+  if (h >= cv.height) view.y = Math.min(0, Math.max(cv.height - h, view.y));
+  else view.y = (cv.height - h) / 2;
+}
+
+function draw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  if (src) {
+    clampView();
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, view.x, view.y, src.width * view.scale, src.height * view.scale);
+  }
+  layout = renderTemplate(ctx, tpl, cv.width, cv.height, macroVars(), sel);
+}
+
+// ── template rendering ───────────────────────────────────────────────────
+// One function draws the preview, the thumbnails, and the pixels that get
+// transmitted. Anything that only affects the preview would be a lie.
+
+// The overlay faces are drawn into the transmitted picture, so these have to
+// match what fonts.css actually loaded — a fallback here is a different
+// picture on the other end, not just a different-looking preview.
+const FONT_STACK = {
+  mono: "'Share Tech Mono', Consolas, monospace",
+  display: "'VT323', 'Share Tech Mono', monospace",
+  sans: "'Rajdhani', Arial, sans-serif",
+};
+
+// The ONE picture being sent back, for every `rx` element in the template.
+// Held here rather than in the template because a template is saved to disk
+// and a gallery id is not: the picture it named would be deleted long before
+// the template was. `rxPic.img` is null until the bitmap has decoded — the
+// renderer is synchronous and cannot wait for it.
+let rxPic = { id: null, img: null };
+
+function setSendBack(id) {
+  if (!id) { rxPic = { id: null, img: null }; draw(); paintSend(); return; }
+  rxPic = { id, img: null };
+  const im = new Image();
+  im.onload = () => {
+    // Guard against two clicks racing: only the newest selection wins.
+    if (rxPic.id === id) { rxPic.img = im; draw(); paintSend(); }
+  };
+  im.onerror = () => { if (rxPic.id === id) { rxPic.img = null; draw(); paintSend(); } };
+  im.src = '/api/sstv/gallery/' + encodeURIComponent(id) + '.png';
+}
+
+function hasRxElement() {
+  return !!(tpl && tpl.elements.some(e => e.type === 'rx'));
+}
+
+// Fit the picture inside the element's box without distorting it. An inset
+// that stretches their picture to our aspect is worse than sending nothing:
+// it misrepresents what we received.
+function rxFit(img, x, y, w, h) {
+  const a = img.width / img.height, b = w / h;
+  const dw = a > b ? w : h * a, dh = a > b ? w / a : h;
+  return { x: x + (w - dw) / 2, y: y + (h - dh) / 2, w: dw, h: dh };
+}
+
+let tpl = null;          // the applied template, or null
+let templates = [];
+let sel = -1;            // selected element index
+let layout = [];         // per-element canvas-pixel rects, for hit testing
+let dirty = false;
+
+function macroVars() {
+  const m = Object.assign({}, (st && st.macros) || {});
+  m.call = ($('q-call').value || '').toUpperCase();
+  m.rst = ($('q-rst').value || '').toUpperCase();
+  return m;
+}
+
+function expand(text, vars) {
+  return String(text || '').replace(/\{([a-z]+)\}/g, (_, k) => vars[k] || '');
+}
+
+function renderTemplate(c, t, W, H, vars, selected) {
+  const rects = [];
+  if (!t) return rects;
+  t.elements.forEach((e, i) => {
+    c.save();
+    c.globalAlpha = e.alpha == null ? 1 : e.alpha;
+    let r;
+    if (e.type === 'text') {
+      const px = Math.max(6, e.size * H);
+      const fam = FONT_STACK[e.font] || FONT_STACK.mono;
+      // Share Tech Mono and VT323 ship one weight each; asking for bold gets
+      // you a synthetic smear, which is exactly what you do not want at 320px
+      // wide. Only the proportional face takes a real weight.
+      const wt = (e.font === 'sans' && e.bold !== false) ? '600 ' : '';
+      c.font = `${wt}${px}px ${fam}`;
+      c.textBaseline = 'top';
+      c.textAlign = e.align || 'left';
+      const txt = expand(e.text, vars);
+      const x = e.x * W, y = e.y * H;
+      const w = c.measureText(txt).width;
+      // Outline first: SSTV resolution is low and a photo behind arbitrary
+      // text makes it unreadable without one.
+      const ow = (e.outline_width == null ? 0.006 : e.outline_width) * H;
+      if (ow > 0) {
+        c.lineWidth = Math.max(1, ow);
+        c.strokeStyle = e.outline || '#000000';
+        c.lineJoin = 'round';
+        c.strokeText(txt, x, y);
+      }
+      c.fillStyle = e.color || '#ffffff';
+      c.fillText(txt, x, y);
+      const left = e.align === 'right' ? x - w : (e.align === 'center' ? x - w / 2 : x);
+      r = { x: left, y: y, w: Math.max(w, px * 0.5), h: px * 1.2 };
+    } else if (e.type === 'rx') {
+      const x = e.x * W, y = e.y * H, w = e.w * W, h = e.h * H;
+      // No picture chosen yet draws the empty frame and nothing else — the
+      // SAME thing the transmitted pixels would get. A preview-only
+      // placeholder here would be a lie about what goes out.
+      // The frame is drawn around the FITTED picture, not around the
+      // element box, so it hugs whatever aspect actually arrived — 320x256
+      // Scottie, 320x240 Robot 36, 640x496 PD — instead of leaving dead
+      // letterbox bars inside a border. The box is the maximum extent.
+      let f = { x, y, w, h };
+      if (rxPic.img) {
+        f = rxFit(rxPic.img, x, y, w, h);
+        c.imageSmoothingEnabled = true;
+        c.imageSmoothingQuality = 'high';
+        c.drawImage(rxPic.img, f.x, f.y, f.w, f.h);
+      }
+      const bw = (e.border_width == null ? 0.008 : e.border_width) * H;
+      if (bw > 0) {
+        c.lineWidth = Math.max(1, bw);
+        c.strokeStyle = e.border || '#00ff9c';
+        c.strokeRect(f.x + bw / 2, f.y + bw / 2, f.w - bw, f.h - bw);
+      }
+      r = { x, y, w, h };
+    } else {
+      const x = e.x * W, y = e.y * H, w = e.w * W, h = e.h * H;
+      if (e.type === 'bar') {
+        const g = c.createLinearGradient(x, y, x + w, y);
+        g.addColorStop(0, e.color || '#ffffff');
+        g.addColorStop(1, e.color2 || e.color || '#ffffff');
+        c.fillStyle = g;
+      } else {
+        c.fillStyle = e.color || '#000000';
+      }
+      c.fillRect(x, y, w, h);
+      r = { x, y, w, h };
+    }
+    c.restore();
+    rects.push(r);
+    if (i === selected) {
+      c.save();
+      c.strokeStyle = '#44bbff';
+      c.lineWidth = Math.max(1, H / 180);
+      c.setLineDash([Math.max(2, H / 60), Math.max(2, H / 60)]);
+      c.strokeRect(r.x - 2, r.y - 2, r.w + 4, r.h + 4);
+      c.restore();
+    }
+  });
+  return rects;
+}
+
+// ── template picker ──────────────────────────────────────────────────────
+
+// Placeholders for the thumbnails only. A station with no callsign set yet
+// would otherwise see every template preview render completely empty, which
+// looks like the feature is broken rather than like a field needs filling.
+const SAMPLE = {
+  mycall: 'W1AW', call: 'K2ABC', rst: '59', grid: 'FN31', freq: '14.230',
+  band: '20m', mode: 'USB', date: '2026-01-01', utc: '12:00Z',
+};
+
+function sampleVars() {
+  const v = macroVars();
+  for (const k of Object.keys(SAMPLE)) if (!v[k]) v[k] = SAMPLE[k];
+  return v;
+}
+
+function paintStrip() {
+  const strip = $('tstrip');
+  strip.innerHTML = '';
+  const vars = sampleVars();
+  const items = [{ id: null, name: 'NONE', elements: [] }].concat(templates);
+  for (const t of items) {
+    const d = document.createElement('div');
+    d.className = 'tcard' + ((tpl ? tpl.id : null) === t.id ? ' sel' : '');
+    const c = document.createElement('canvas');
+    c.width = 128; c.height = 96;
+    const g = c.getContext('2d');
+    g.fillStyle = '#123'; g.fillRect(0, 0, 128, 96);
+    g.fillStyle = '#2a4a5a'; g.fillRect(0, 48, 128, 48);
+    renderTemplate(g, t.id ? t : null, 128, 96, vars, -1);
+    const label = document.createElement('span');
+    label.textContent = t.name + (t.id && !t.builtin ? ' *' : '');
+    d.appendChild(c); d.appendChild(label);
+    d.onclick = () => applyTemplate(t.id);
+    strip.appendChild(d);
+  }
+}
+
+function applyTemplate(id) {
+  const found = templates.find((t) => t.id === id);
+  tpl = found ? JSON.parse(JSON.stringify(found)) : null;
+  sel = -1; dirty = false;
+  $('t-del').disabled = !(tpl && !tpl.builtin);
+  paintStrip(); showProps(); draw();
+}
+
+async function loadTemplates(keep) {
+  const r = await api('/api/sstv/templates');
+  templates = r.templates || [];
+  if (keep && tpl) {
+    const still = templates.find((t) => t.id === tpl.id);
+    if (still) tpl = JSON.parse(JSON.stringify(still));
+  }
+  paintStrip();
+}
+
+// ── direct manipulation ──────────────────────────────────────────────────
+
+function hit(cx, cy) {
+  // Topmost first, so a label over a box selects the label.
+  for (let i = layout.length - 1; i >= 0; i--) {
+    const r = layout[i];
+    if (cx >= r.x - 4 && cx <= r.x + r.w + 4 && cy >= r.y - 4 && cy <= r.y + r.h + 4) return i;
+  }
+  return -1;
+}
+
+function showProps() {
+  const p = $('props');
+  if (!tpl || sel < 0 || !tpl.elements[sel]) { p.hidden = true; return; }
+  const e = tpl.elements[sel];
+  p.hidden = false;
+  $('pkind').textContent = e.type === 'rx' ? 'RX INSET' : e.type.toUpperCase();
+  $('p-textrow').style.display = e.type === 'text' ? '' : 'none';
+  $('p-align').style.display = $('p-font').style.display = e.type === 'text' ? '' : 'none';
+  if (e.type === 'text') {
+    $('p-text').value = e.text || '';
+    $('p-size').value = Math.round((e.size || 0.09) * 100);
+    $('p-align').textContent = (e.align || 'left').toUpperCase();
+    $('p-font').textContent = (e.font || 'mono').toUpperCase();
+  } else {
+    $('p-size').value = Math.round((e.h || 0.12) * 100);
+  }
+  // The inset's colour control is its frame, not a fill: the fill is their
+  // picture. Editing `color` here would change nothing visible.
+  $('p-color').value = e.type === 'rx'
+    ? (e.border || '#33ff99') : (e.color || '#ffffff');
+}
+
+function touch() { dirty = true; draw(); }
+
+$('p-text').oninput = () => {
+  if (tpl && tpl.elements[sel]) { tpl.elements[sel].text = $('p-text').value; touch(); }
+};
+$('p-size').oninput = () => {
+  const e = tpl && tpl.elements[sel]; if (!e) return;
+  const v = (+$('p-size').value) / 100;
+  if (e.type === 'text') { e.size = v; touch(); return; }
+  if (e.type === 'rx') {
+    // Scale the box about its centre; the frame tracks the picture inside it
+    // on its own, so there is no aspect to chase here.
+    const cx = e.x + e.w / 2, cy = e.y + e.h / 2;
+    const k = v / Math.max(0.01, e.h);
+    e.h = v; e.w = Math.min(1.5, e.w * k);
+    e.x = cx - e.w / 2; e.y = cy - e.h / 2;
+    touch(); return;
+  }
+  e.h = v;
+  touch();
+};
+$('p-color').oninput = () => {
+  const e = tpl && tpl.elements[sel]; if (!e) return;
+  if (e.type === 'rx') { e.border = $('p-color').value; touch(); return; }
+  e.color = $('p-color').value;
+  if (e.type === 'bar') e.color2 = e.color;
+  touch();
+};
+$('p-align').onclick = () => {
+  const e = tpl && tpl.elements[sel]; if (!e || e.type !== 'text') return;
+  const order = ['left', 'center', 'right'];
+  e.align = order[(order.indexOf(e.align || 'left') + 1) % 3];
+  $('p-align').textContent = e.align.toUpperCase();
+  touch();
+};
+$('p-font').onclick = () => {
+  const e = tpl && tpl.elements[sel]; if (!e || e.type !== 'text') return;
+  const order = ['mono', 'display', 'sans'];
+  e.font = order[(order.indexOf(e.font || 'mono') + 1) % 3];
+  $('p-font').textContent = e.font.toUpperCase();
+  touch();
+};
+$('p-del').onclick = () => {
+  if (!tpl || sel < 0) return;
+  tpl.elements.splice(sel, 1); sel = -1; showProps(); touch();
+};
+$('p-back').onclick = () => {
+  if (!tpl || sel < 1) return;
+  const [e] = tpl.elements.splice(sel, 1);
+  tpl.elements.unshift(e); sel = 0; touch();
+};
+
+function ensureTemplate() {
+  // A distinct id, so the NONE card does not light up while you are building
+  // something that is emphatically not "none".
+  if (!tpl) {
+    tpl = { id: '__unsaved', name: 'Untitled', elements: [], builtin: false };
+    paintStrip();
+  }
+}
+$('t-addtext').onclick = () => {
+  ensureTemplate();
+  tpl.elements.push({ type: 'text', text: '{mycall}', x: 0.05, y: 0.05,
+                      size: 0.12, color: '#ffffff', align: 'left', font: 'display',
+                      outline: '#000000', outline_width: 0.006, alpha: 1 });
+  sel = tpl.elements.length - 1; showProps(); touch();
+};
+$('t-addbox').onclick = () => {
+  ensureTemplate();
+  tpl.elements.unshift({ type: 'box', x: 0, y: 0.82, w: 1, h: 0.18,
+                         color: '#000000', alpha: 0.62 });
+  sel = 0; showProps(); touch();
+};
+$('t-save').onclick = async () => {
+  ensureTemplate();
+  const name = prompt('Save template as:', tpl.name === 'Untitled' ? '' : tpl.name);
+  if (!name) return;
+  const body = { name, elements: tpl.elements };
+  const r = await api('/api/sstv/templates', { template: body });
+  if (!r.ok) { setStatus(r.error || 'save failed', 'err'); return; }
+  templates = r.templates || templates;
+  tpl = JSON.parse(JSON.stringify(r.template));
+  dirty = false;
+  $('t-del').disabled = false;
+  paintStrip(); draw();
+  setStatus('template saved: ' + r.template.name);
+};
+$('t-del').onclick = async () => {
+  if (!tpl || tpl.builtin || !tpl.id) return;
+  if (!confirm('Delete template "' + tpl.name + '"?')) return;
+  const r = await fetch('/api/sstv/templates/' + encodeURIComponent(tpl.id),
+                        { method: 'DELETE' }).then((x) => x.json());
+  templates = r.templates || templates;
+  if (!r.ok) { setStatus(r.error || 'delete failed', 'err'); return; }
+  applyTemplate(null);
+  setStatus('template deleted');
+};
+
+for (const id of ['q-call', 'q-rst']) $(id).oninput = () => { draw(); paintStrip(); };
+
+function loadFile(f) {
+  if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    src = img;
+    $('wrap').classList.remove('empty');
+    $('reset').disabled = false;
+    $('srcinfo').textContent = `${img.width}x${img.height} loaded.`;
+    fitCover(); draw(); paintSend();
+  };
+  img.onerror = () => setStatus('could not read that image', 'err');
+  img.src = URL.createObjectURL(f);
+}
+
+$('pick').onclick = () => $('file').click();
+$('file').onchange = (e) => loadFile(e.target.files[0]);
+$('reset').onclick = () => { fitCover(); draw(); };
+
+const wrap = $('wrap');
+wrap.addEventListener('dragover', (e) => { e.preventDefault(); wrap.classList.add('over'); });
+wrap.addEventListener('dragleave', () => wrap.classList.remove('over'));
+wrap.addEventListener('drop', (e) => {
+  e.preventDefault(); wrap.classList.remove('over');
+  loadFile(e.dataTransfer.files && e.dataTransfer.files[0]);
+});
+window.addEventListener('paste', (e) => {
+  for (const it of (e.clipboardData || {}).items || []) {
+    if (it.type.startsWith('image/')) { loadFile(it.getAsFile()); return; }
+  }
+});
+
+let drag = null;
+
+function toCanvas(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * (cv.width / r.width),
+           y: (e.clientY - r.top) * (cv.height / r.height),
+           sx: cv.width / r.width, sy: cv.height / r.height };
+}
+
+cv.addEventListener('pointerdown', (e) => {
+  if (st.tx_active) return;
+  const c = toCanvas(e);
+  // Overlay elements take the pointer before the photo does — you are far
+  // more often nudging a callsign than re-framing a picture you just framed.
+  const i = hit(c.x, c.y);
+  if (i >= 0) {
+    sel = i; showProps(); draw();
+    const el = tpl.elements[i];
+    drag = { el: i, x: e.clientX, y: e.clientY, ex: el.x, ey: el.y };
+    cv.setPointerCapture(e.pointerId);
+    return;
+  }
+  if (sel !== -1) { sel = -1; showProps(); draw(); }
+  if (!src) return;
+  drag = { el: null, x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  const r = cv.getBoundingClientRect();
+  const dx = (e.clientX - drag.x) * (cv.width / r.width);
+  const dy = (e.clientY - drag.y) * (cv.height / r.height);
+  if (drag.el != null) {
+    const el = tpl.elements[drag.el];
+    el.x = drag.ex + dx / cv.width;
+    el.y = drag.ey + dy / cv.height;
+    dirty = true;
+    draw();
+    return;
+  }
+  view.x = drag.vx + dx;
+  view.y = drag.vy + dy;
+  draw();
+});
+const endDrag = () => { drag = null; };
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
+cv.addEventListener('wheel', (e) => {
+  if (!src || st.tx_active) return;
+  e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  const cx = (e.clientX - r.left) * (cv.width / r.width);
+  const cy = (e.clientY - r.top) * (cv.height / r.height);
+  const k = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const min = Math.max(cv.width / src.width, cv.height / src.height);
+  const ns = Math.max(min, Math.min(min * 8, view.scale * k));
+  view.x = cx - (cx - view.x) * (ns / view.scale);
+  view.y = cy - (cy - view.y) * (ns / view.scale);
+  view.scale = ns;
+  draw();
+}, { passive: false });
+
+// ── modes ────────────────────────────────────────────────────────────────
+
+function applyMode() {
+  mode = modes.find((m) => m.name === $('mode').value) || modes[0];
+  if (!mode) return;
+  cv.width = mode.width;
+  cv.height = mode.height;
+  $('modeinfo').innerHTML = `${mode.width}x${mode.height} · <b>${mode.seconds} s</b> on the air`
+    + (mode.seconds > 150
+        ? '<br><span class="warn">Long transmission. Check the band is clear first.</span>'
+        : '');
+  $('modeinfo').className = 'hint' + (mode.seconds > 150 ? ' warn' : '');
+  if (src) fitCover();
+  draw(); paintSend();
+}
+$('mode').onchange = applyMode;
+
+// Show dBFS as well as the raw amplitude. The useful range is all down at
+// the bottom of the scale — 0.05 to 0.035 is 3 dB, which is the difference
+// between sitting on the ALC and being clear of it, and reads as nothing at
+// all in linear amplitude. The old min/step were both 0.05, so 0.05 was the
+// floor AND the only stop under 0.10: an operator aiming a few dB lower had
+// nowhere left to go and it looked like the control had stopped working.
+function showLevel() {
+  const v = +$('level').value;
+  $('lvlval').textContent = v.toFixed(3);
+  $('lvldb').textContent = '(' + (20 * Math.log10(v)).toFixed(1) + ' dBFS)';
+}
+$('level').oninput = showLevel;
+
+// ── send ─────────────────────────────────────────────────────────────────
+
+function paintSend() {
+  const b = $('send'), t = $('sendtxt');
+  if (st.tx_active) {
+    b.classList.add('sending');
+    const pct = Math.round((st.tx_progress || 0) * 100);
+    $('sendfill').style.width = pct + '%';
+    t.textContent = `SENDING ${st.tx_mode || ''} · ${pct}% · ${st.tx_remaining}s LEFT`;
+    b.disabled = true;
+    $('abort').hidden = false;
+    return;
+  }
+  b.classList.remove('sending');
+  $('sendfill').style.width = '0%';
+  $('abort').hidden = true;
+  if (st.tune_active) {
+    t.textContent = 'REMOTE TUNE IS ACTIVE';
+    b.disabled = true; return;
+  }
+  if (!st.active) { t.textContent = 'ENTER SSTV FIRST'; b.disabled = true; return; }
+  // A send-back card carries no photo of ours — the received picture IS the
+  // content — so an rx inset with something loaded counts as an image.
+  const rxReady = hasRxElement() && rxPic.img;
+  if (!src && !rxReady) {
+    t.textContent = hasRxElement() ? 'PICK A PICTURE TO SEND BACK' : 'LOAD AN IMAGE';
+    b.disabled = true; return;
+  }
+  b.disabled = false;
+  t.textContent = `SEND · ${mode ? mode.name.toUpperCase() : ''} · ${mode ? mode.seconds : '?'} S · ${st.watts || '?'} W`;
+}
+
+$('send').onclick = async () => {
+  if (!src || !mode) return;
+  setStatus('rendering…');
+  // Render one clean frame first. The selection outline is an editing aid and
+  // would otherwise be transmitted as part of the picture.
+  const wasSel = sel;
+  sel = -1;
+  draw();
+  const data = cv.toDataURL('image/png');
+  sel = wasSel;
+  draw();
+  const r = await api('/api/sstv/tx', {
+    image: data, mode: mode.name, fit: 'stretch', level: +$('level').value,
+  });
+  paint(r);
+  if (!r.ok) { setStatus(r.error || 'send failed', 'err'); return; }
+  setStatus('transmitting — ABORT or Esc stops it', 'live');
+  startPoll();
+};
+
+$('abort').onclick = async () => {
+  const r = await api('/api/sstv/abort', {});
+  paint(r);
+  setStatus('aborted — RF off', 'err');
+};
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && st.tx_active) { e.preventDefault(); $('abort').click(); return; }
+  if (e.key === 'Escape' && sel >= 0) { sel = -1; showProps(); draw(); return; }
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target || {}).tagName || '');
+  if (!typing && (e.key === 'Delete' || e.key === 'Backspace') && sel >= 0) {
+    e.preventDefault(); $('p-del').click();
+  }
+});
+
+$('enter').onclick = async () => {
+  setStatus(st.active ? 'exiting…' : 'entering…');
+  const r = await api(st.active ? '/api/sstv/exit' : '/api/sstv/enter', {});
+  paint(r);
+  if (!r.ok) setStatus(r.error || 'failed', 'err');
+  else setStatus(r.active
+    ? `entered · ${r.radio_mode} · power clamped to ${r.watts} W` : 'idle', r.active ? 'live' : '');
+};
+
+// Internal ATU — the radio's own tuner, nothing to do with the MFJ.
+$('atu').onclick = async () => {
+  const on = !st.atu;
+  const r = await api('/api/atu', { on });
+  if (r.ok === false) setStatus(r.error || 'ATU failed', 'err');
+  else setStatus('internal ATU ' + (on ? 'in line' : 'bypassed'));
+  paint(await api('/api/sstv'));
+};
+
+// The match cycle keys the radio for a second or two on its own.
+$('atutune').onclick = async () => {
+  const r = await api('/api/atu/tune', {});
+  if (r.ok === false) { setStatus(r.error || 'ATU tune failed', 'err'); return; }
+  setStatus(r.atu_tuning ? 'internal ATU matching…' : 'ATU tune stopped',
+            r.atu_tuning ? 'live' : '');
+  if (r.atu_tuning) startPoll();   // the meters are the point of a match cycle
+  paint(await api('/api/sstv'));
+};
+
+$('rtune').onclick = async () => {
+  const on = !st.tune_active;
+  setStatus(on ? 'keying tune carrier…' : 'tune off');
+  const r = await api('/api/tune', { on, watts: st.tune_watts || 20 });
+  if (r.ok === false) setStatus(r.error || 'TUNE failed', 'err');
+  else setStatus(on
+    ? `REMOTE TUNE — ${r.watts || st.tune_watts || 20} W ${r.mode || 'AM'} carrier up`
+    : 'tune off', on ? 'live' : '');
+  if (on) startPoll();          // watch SWR come down while the tuner hunts
+  paint(await api('/api/sstv'));
+};
+
+// ── status ───────────────────────────────────────────────────────────────
+
+function meter(id, frac, num, hot) {
+  $(id + '-f').style.width = Math.max(0, Math.min(1, frac || 0)) * 100 + '%';
+  $(id + '-f').classList.toggle('hot', !!hot);
+  $(id + '-n').textContent = num;
+}
+
+function paint(s) {
+  if (!s) return;
+  st = s;
+  $('enter').textContent = s.active ? 'EXIT' : 'ENTER';
+  $('enter').classList.toggle('on', !!s.active);
+  const lamp = $('lamp');
+  lamp.textContent = s.tx_active ? 'TX' : (s.active ? 'READY' : 'IDLE');
+  lamp.className = 'lamp' + (s.tx_active ? ' tx' : (s.active ? ' rx' : ''));
+  $('freq').textContent = s.freq_a ? (s.freq_a / 1e6).toFixed(3) : '—';
+
+  if (s.rf_gain != null && document.activeElement !== $('rf-sl')) {
+    $('rf-sl').value = s.rf_gain;
+    $('rf-val').textContent = s.rf_gain;
+  }
+
+  const atu = $('atu');
+  atu.classList.toggle('on', !!s.atu);
+  atu.textContent = s.atu ? 'ATU IN' : 'ATU BYP';
+  const at = $('atutune');
+  at.classList.toggle('tuning', !!s.atu_tuning);
+  at.textContent = s.atu_tuning ? 'ABORT MATCH' : 'ATU TUNE';
+
+  const rt = $('rtune');
+  rt.classList.toggle('on', !!s.tune_active);
+  rt.textContent = s.tune_active
+    ? '● TUNING ' + (s.tune_watts || 20) + 'W'
+    : 'REMOTE TUNE';
+
+  meter('po', (s.watts_out || 0) / 100, s.is_tx ? (s.watts_out || 0) + 'W' : '—');
+  meter('alc', (s.alc_out || 0) / 100, s.is_tx ? String(s.alc_out || 0) : '—',
+        (s.alc_out || 0) > 60);
+  const swr = s.swr_out;
+  meter('swr', swr ? (swr - 1) / 4 : 0, swr ? swr.toFixed(1) : '—.—', swr && swr >= 2);
+
+  const mk = JSON.stringify(s.macros || {});
+  if (mk !== lastMacros) {
+    lastMacros = mk;
+    if (!drag && tpl) { draw(); paintStrip(); }
+  }
+
+  paintRx(s);
+  if (s.rx_last && s.rx_last.id !== lastSavedId) {
+    lastSavedId = s.rx_last.id;
+    setStatus('received ' + s.rx_last.mode + ' — saved to the gallery', 'live');
+    if (pane === 'gal') loadGallery();
+    if (pane === 'rx') showLast();
+  }
+
+  if (s.tx_error && !s.tx_active) setStatus(s.tx_error, 'err');
+  else if (s.blocked_by) setStatus(s.blocked_by + ' is entered — exit it first', 'err');
+  paintSend();
+  if (!s.tx_active && !s.rx_active && !s.tune_active && !s.atu_tuning) stopPoll();
+}
+
+// ── panes ────────────────────────────────────────────────────────────────
+
+let pane = 'tx';
+
+function showPane(which) {
+  pane = which;
+  for (const [id, el] of [['tx', 'main'], ['rx', 'rxpane'], ['gal', 'galpane']]) {
+    $(el).hidden = (id !== which);
+    $('tab-' + id).classList.toggle('sel', id === which);
+  }
+  // The send dock belongs to TX; leaving it up on the gallery would be an
+  // invitation to transmit something you are not looking at.
+  $('dock').style.display = which === 'tx' ? '' : 'none';
+  if (which === 'gal') loadGallery();
+  if (which === 'rx') { pullRx(); if (st.last_adjustable) showLast(); }
+}
+$('tab-tx').onclick = () => showPane('tx');
+$('tab-rx').onclick = () => showPane('rx');
+$('tab-gal').onclick = () => showPane('gal');
+
+// ── receive ──────────────────────────────────────────────────────────────
+
+let rxSeen = -1;
+
+function paintRx(s) {
+  const on = !!s.rx_active;
+  $('rxwrap').classList.toggle('live', on);
+  $('rx-mode').textContent = s.rx_mode || '—';
+  $('rx-lines').textContent = on ? `${s.rx_lines}/${s.rx_total}` : '—';
+  $('rx-snr').textContent = on ? `SNR ${s.rx_snr}` : '—';
+  $('rx-slant').textContent = on ? `${s.rx_slant_ppm} ppm` : '—';
+  $('rx-mode').className = 'lamp' + (on ? ' rx' : '');
+  if (on && pane === 'rx' && s.rx_lines !== rxSeen) { rxSeen = s.rx_lines; pullRx(); }
+  if (!on) rxSeen = -1;
+  paintAdj(s);
+  if (pane === 'rx') paintTune(s);
+}
+
+async function pullRx() {
+  try {
+    const r = await fetch('/api/sstv/rx/image', { cache: 'no-store' });
+    if (r.status !== 200) return;
+    const bmp = await createImageBitmap(await r.blob());
+    const c = $('rxcv');
+    c.width = bmp.width; c.height = bmp.height;
+    c.getContext('2d').drawImage(bmp, 0, 0);
+    $('rxwrap').classList.add('live');
+  } catch (_) { /* the picture is still arriving; try again next tick */ }
+}
+
+// ── straightening the last picture ───────────────────────────────────────
+// The decoder keeps the whole frequency trace of the last reception, so this
+// re-renders a picture that has already arrived. No re-send, no new audio.
+
+let adjTimer = null;
+
+const TUNE_LO = 1000, TUNE_HI = 2400;
+const TUNE_TICKS = [1200, 1500, 1900, 2300];
+
+function paintTune(s) {
+  const c = $('tune'), g = c.getContext('2d');
+  const W = c.width, H = c.height;
+  g.fillStyle = '#050c05'; g.fillRect(0, 0, W, H);
+  const bins = s.tune_bins || [];
+  if (bins.length) {
+    const bw = W / bins.length;
+    g.fillStyle = '#33ff99';
+    for (let i = 0; i < bins.length; i++) {
+      const h = (bins[i] / 255) * (H - 12);
+      g.fillRect(i * bw, H - 12 - h, Math.max(1, bw - 1), h);
+    }
+  }
+  g.strokeStyle = '#2a5a2a'; g.fillStyle = '#66cc88';
+  g.font = '10px monospace'; g.textAlign = 'center';
+  for (const t of TUNE_TICKS) {
+    const x = ((t - TUNE_LO) / (TUNE_HI - TUNE_LO)) * W;
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H - 12); g.stroke();
+    g.fillText(String(t), x, H - 2);
+  }
+  const off = s.tune_offset_hz;
+  const el = $('tune-off');
+  el.textContent = off == null ? 'no signal'
+    : (off > 0 ? '+' : '') + off.toFixed(0) + ' Hz';
+  el.className = 'lamp' + (off == null ? '' : (Math.abs(off) < 15 ? ' rx' : ' tx'));
+}
+
+let rfGainTimer = null;
+function onRfGain(v) {
+  $('rf-val').textContent = v;
+  clearTimeout(rfGainTimer);
+  rfGainTimer = setTimeout(() => api('/api/rf_gain', { val: +v }), 80);
+}
+
+function paintAdj(s) {
+  const on = !!s.last_adjustable;
+  for (const id of ['adj-slant', 'adj-shift', 'adj-auto', 'adj-save', 'adj-show']) {
+    $(id).disabled = !on;
+  }
+  $('adj-note').textContent = on
+    ? `${s.last_mode} held in memory — drag to straighten, then save.`
+    : 'Nothing received yet this session.';
+  if (on && document.activeElement !== $('adj-slant')
+      && document.activeElement !== $('adj-shift')) {
+    $('adj-slant').value = s.last_slant_ppm || 0;
+    $('adj-shift').value = s.last_shift_ms || 0;
+    showAdjNumbers();
+  }
+}
+
+function showAdjNumbers() {
+  $('adj-val').textContent = Math.round(+$('adj-slant').value) + ' ppm';
+  $('adj-shiftval').textContent = (+$('adj-shift').value).toFixed(1) + ' ms';
+}
+
+async function pushAdj(body) {
+  const r = await api('/api/sstv/rx/adjust', body);
+  if (!r.ok) { setStatus(r.error || 'could not adjust', 'err'); return; }
+  if (r.last_slant_ppm != null) {
+    $('adj-slant').value = r.last_slant_ppm;
+    $('adj-shift').value = r.last_shift_ms;
+    showAdjNumbers();
+  }
+  await showLast();
+}
+
+function scheduleAdj() {
+  showAdjNumbers();
+  // Re-rendering a whole picture per slider tick would be silly; wait for the
+  // drag to settle.
+  clearTimeout(adjTimer);
+  adjTimer = setTimeout(() => pushAdj({
+    slant_ppm: +$('adj-slant').value, shift_ms: +$('adj-shift').value,
+  }), 160);
+}
+$('adj-slant').oninput = scheduleAdj;
+$('adj-shift').oninput = scheduleAdj;
+$('adj-auto').onclick = () => pushAdj({ auto: true });
+$('adj-show').onclick = () => showLast();
+$('adj-save').onclick = async () => {
+  const r = await api('/api/sstv/rx/resave', {});
+  if (!r.ok) { setStatus(r.error || 'could not save', 'err'); return; }
+  setStatus('saved straightened — ' + r.id, 'live');
+  if (pane === 'gal') loadGallery();
+};
+
+async function showLast() {
+  try {
+    const r = await fetch('/api/sstv/rx/last.png', { cache: 'no-store' });
+    if (r.status !== 200) return;
+    const bmp = await createImageBitmap(await r.blob());
+    const c = $('rxcv');
+    c.width = bmp.width; c.height = bmp.height;
+    c.getContext('2d').drawImage(bmp, 0, 0);
+    $('rxwrap').classList.add('live');
+  } catch (_) { /* nothing to show */ }
+}
+
+$('adj-back').onclick = () => {
+  // Send back the picture the adjust panel is on — which is the one just
+  // straightened, if the operator straightened it. Falls back to the newest.
+  const id = (st.rx_last && st.rx_last.id) || null;
+  if (!id) { setStatus('nothing received yet to send back', 'err'); return; }
+  setSendBack(id);
+  if (!hasRxElement()) applyTemplate('send-back');
+  showPane('tx');
+  draw(); paintSend();
+  setStatus('ready to send their picture back — check the mode and press SEND');
+};
+
+// ── gallery ──────────────────────────────────────────────────────────────
+
+async function loadGallery() {
+  const r = await api('/api/sstv/gallery');
+  const g = $('gal');
+  g.innerHTML = '';
+  const items = r.items || [];
+  $('galnote').textContent = items.length
+    ? `${items.length} received.` : 'Nothing received yet.';
+  for (const it of items) {
+    const d = document.createElement('div');
+    d.className = 'gcard';
+    const img = document.createElement('img');
+    img.src = it.url; img.loading = 'lazy';
+    img.onclick = () => window.open(it.url, '_blank');
+    const lab = document.createElement('span');
+    const when = new Date((it.when || 0) * 1000);
+    lab.textContent = `${it.mode || '?'} · ${when.toLocaleString()}`
+      + (it.complete === false ? ' · partial' : '');
+    const back = document.createElement('button');
+    back.textContent = 'SEND BACK';
+    back.title = 'Put this picture into the next transmission, so they can '
+               + 'see how their own signal landed here';
+    back.onclick = () => {
+      setSendBack(it.id);
+      // Only reach for the built-in card if the operator has not already
+      // arranged an inset themselves — clobbering their layout on a click
+      // labelled "send back" would be the wrong kind of helpful.
+      if (!hasRxElement()) applyTemplate('send-back');
+      showPane('tx');
+      draw(); paintSend();
+      setStatus('ready to send their picture back — check the mode and press SEND');
+    };
+    const del = document.createElement('button');
+    del.textContent = 'DELETE';
+    del.onclick = async () => {
+      if (!confirm('Delete this picture?')) return;
+      await fetch('/api/sstv/gallery/' + encodeURIComponent(it.id), { method: 'DELETE' });
+      loadGallery();
+    };
+    d.appendChild(img); d.appendChild(lab); d.appendChild(back); d.appendChild(del);
+    g.appendChild(d);
+  }
+}
+
+function startPoll() {
+  if (poll) return;
+  poll = setInterval(async () => { paint(await api('/api/sstv')); }, 250);
+}
+function stopPoll() { if (poll) { clearInterval(poll); poll = null; } }
+
+async function ensureFonts() {
+  if (!document.fonts) return;
+  try {
+    // fonts.ready alone is not enough: the overlay faces may not be used by
+    // any DOM node yet, and a face nobody has asked for is never fetched.
+    await Promise.all(Object.values(FONT_STACK).map(
+      (f) => document.fonts.load('40px ' + f.split(',')[0])));
+    await document.fonts.ready;
+  } catch (_) { /* fall back rather than block the page */ }
+}
+
+async function boot() {
+  await ensureFonts();
+  const m = await api('/api/sstv/modes');
+  modes = m.modes || [];
+  $('mode').innerHTML = modes
+    .map((x) => `<option value="${x.name}">${x.name} — ${x.seconds}s</option>`).join('');
+  const s = await api('/api/sstv');
+  if (s.tx_level) { $('level').value = s.tx_level; }
+  showLevel();
+  $('mode').value = m.default && modes.some((x) => x.name === m.default)
+    ? m.default : (modes[0] && modes[0].name);
+  applyMode();
+  // ?pane=rx / ?pane=gal so a tab can be bookmarked or linked to.
+  const want = new URLSearchParams(location.search).get('pane');
+  if (want === 'rx' || want === 'gal') showPane(want);
+  await loadTemplates();
+  $('macrohelp').innerHTML = 'Macros: '
+    + ['mycall', 'call', 'rst', 'grid', 'freq', 'band', 'mode', 'date', 'utc']
+        .map((k) => `<code>{${k}}</code>`).join(' ');
+  paint(s);
+  setStatus(s.active ? 'entered' : 'idle', s.active ? 'live' : '');
+  if (s.tx_active) startPoll();
+  setInterval(async () => {
+    if (poll) return;
+    const st2 = await api('/api/sstv');
+    paint(st2);
+    // A picture coming IN deserves the same attention as one going out.
+    if (st2.rx_active) startPoll();
+  }, 1500);
+}
+boot();
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/service-worker.js', { scope: '/' }).catch(() => {});
+}
+</script>
+</body>
+</html>

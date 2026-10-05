@@ -1,0 +1,10 @@
+# CyberRig native desktop UI (desktop.py + cyberrig/ui_legacy/).
+#
+# Install alongside requirements.txt, e.g.:
+#     pip install -r requirements.txt -r requirements-desktop.txt
+#
+# On Debian/Ubuntu, PySide6 is also packaged as python3-pyside6.* if you would
+# rather use apt than a venv. Note that requirements.txt lists pywebview, which
+# is only for native.py's Windows/WebView2 wrapper — it is not needed here and
+# does not install cleanly everywhere.
+PySide6>=6.6.0

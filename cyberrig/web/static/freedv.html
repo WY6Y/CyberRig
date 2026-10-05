@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CyberRig — FreeDV</title>
+<meta name="theme-color" content="#0b140b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #060b06; --panel: #0b140b; --border: #2a5a2a;
+  --green: #33ff99; --gdim: #66cc88; --gbright: #66ff66;
+  --orange: #ffaa33; --red: #ff4444; --blue: #44bbff;
+}
+html, body {
+  height: 100%; height: 100dvh; background: var(--bg); color: var(--green);
+  font-family: Consolas, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+  font-size: 15px; font-weight: 600;
+}
+body {
+  display: flex; flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+#bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 12px; background: #050c05; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.logo { font-weight: 800; letter-spacing: 1px; color: var(--gbright); }
+button, select {
+  font-family: inherit; font-weight: 700; font-size: 13px;
+  background: var(--panel); color: var(--green); border: 1px solid var(--border);
+  padding: 8px 12px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px;
+}
+button:hover { border-color: var(--gbright); color: var(--gbright); }
+button.on { background: #003355; border-color: var(--blue); color: var(--blue); }
+button.live { background: #3a2000; border-color: var(--orange); color: var(--orange); }
+button.warn { background: #3a0000; border-color: var(--red); color: var(--red); }
+#status { flex: 1 1 100%; font-size: 13px; color: var(--gdim); min-height: 1.2em; }
+#status.err { color: var(--red); }
+#status.live { color: var(--gbright); }
+#controls {
+  flex: 0 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: 12px 12px 0; max-width: 640px; width: 100%; margin: 0 auto;
+}
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.chip {
+  border: 1px solid var(--border); padding: 6px 10px; font-size: 13px;
+  letter-spacing: 1px; background: var(--panel);
+}
+.chip.on { border-color: var(--gbright); color: var(--gbright); }
+.chip.sync { border-color: var(--blue); color: var(--blue); }
+.chip.tx { border-color: var(--red); color: var(--red); }
+label { font-size: 12px; color: var(--gdim); letter-spacing: 1px; }
+#spec {
+  width: 100%; height: 72px; background: #050c05; border: 1px solid var(--border);
+  display: block; image-rendering: pixelated;
+}
+#ptt {
+  width: 100%; height: 88px; font-size: 22px; letter-spacing: 3px;
+  border-width: 2px; user-select: none; -webkit-user-select: none; touch-action: none;
+}
+#ptt.on {
+  background: var(--red); color: #000; border-color: #ff0000;
+  box-shadow: 0 0 16px var(--red);
+}
+#dock {
+  padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border); background: #050c05;
+  max-width: 640px; width: 100%; margin: 0 auto;
+  flex-shrink: 0;
+}
+.hint { font-size: 12px; color: var(--gdim); margin-top: 8px; line-height: 1.4; }
+.meters {
+  display: grid; grid-template-columns: 36px 1fr 48px; gap: 4px 8px;
+  align-items: center; margin: 8px 0 12px;
+}
+.meters .lbl { font-size: 12px; color: var(--gdim); letter-spacing: 1px; }
+.meters .bar {
+  height: 10px; background: #050c05; border: 1px solid var(--border); position: relative;
+}
+.meters .fill { height: 100%; background: var(--gbright); width: 0%; }
+.meters .fill.hot { background: var(--red); }
+.meters .num { font-size: 13px; color: var(--gbright); text-align: right; }
+/* Compact VFO — same tap idiom as the main rig page, half the size. */
+#vfo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+#vfo {
+  display: flex; align-items: baseline; font-size: 28px; font-weight: 800;
+  letter-spacing: 1px; color: var(--gbright); user-select: none;
+  -webkit-user-select: none; touch-action: none; line-height: 1;
+}
+#vfo .fdig {
+  cursor: ns-resize; padding: 2px 1px; border-bottom: 1px solid transparent;
+}
+#vfo .fdig:hover { border-bottom-color: var(--gbright); background: #0f1f0f; }
+#vfo .fdig.lead { color: #2f6a44; }
+#vfo .fsep { color: var(--gdim); padding: 0 1px; }
+#vfo-in {
+  font-family: inherit; font-size: 16px; font-weight: 700; width: 8em;
+  background: var(--panel); color: var(--gbright); border: 1px solid var(--gbright);
+  padding: 6px 8px;
+}
+#vfo-in[hidden] { display: none; }
+#remote-tune-btn { flex: 1 1 auto; min-width: 150px; }
+/* Internal FTDX10 ATU (CAT AC) — a different tuner from REMOTE TUNE above. */
+#atu-btn.on { background: #003355; border-color: var(--blue); color: var(--blue); }
+#atu-tune-btn.tuning {
+  background: #3a2000; border-color: var(--orange); color: var(--orange);
+  animation: tune-pulse 1.0s ease-in-out infinite;
+}
+#remote-tune-btn.on {
+  background: #3a2000; border-color: var(--orange); color: var(--orange);
+  box-shadow: 0 0 14px #ff8800aa; animation: tune-pulse 1.2s ease-in-out infinite;
+}
+@keyframes tune-pulse { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
+.pwr-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.pwr-row input[type=range] { flex: 1; accent-color: #33ff99; }
+#spots-wrap {
+  flex: 1 1 180px; min-height: 180px; display: flex; flex-direction: column;
+  max-width: 640px; width: 100%; margin: 0 auto; padding: 8px 12px 0;
+}
+#spots-wrap h2 {
+  font-size: 13px; letter-spacing: 1px; color: var(--gbright);
+  margin-bottom: 6px; font-weight: 800; flex-shrink: 0;
+}
+#spots-scroll {
+  flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+}
+#spots {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+#spots th, #spots td {
+  text-align: left; padding: 6px 4px; border-bottom: 1px solid #1a3a1a;
+  vertical-align: top;
+}
+#spots tr.tx td { color: var(--red); }
+#spots tr { cursor: pointer; }
+#spots tr:hover td { background: #0f1f0f; }
+#spots .msg { color: var(--gdim); font-size: 11px; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button type="button" onclick="location.href='/'">← RIG</button>
+  <span class="logo">FREEDV</span>
+  <span id="call">—</span>
+  <div id="status">idle</div>
+</div>
+<div id="controls">
+  <div class="row">
+    <span class="chip" id="codec-chip">CODEC —</span>
+    <span class="chip" id="sync-chip">SYNC —</span>
+    <span class="chip" id="snr-chip">SNR —</span>
+    <span class="chip" id="radio-chip">RADIO —</span>
+    <button type="button" id="inv-btn" onclick="toggleInvert()" title="Invert modem audio (try if decode sounds reversed)">INV</button>
+  </div>
+  <div id="vfo-row">
+    <div id="vfo" title="Tap the top half of a digit to raise it, bottom half to lower · scroll to spin"></div>
+    <input id="vfo-in" type="text" placeholder="MHz" hidden
+           onkeydown="vfoKey(event)" onblur="vfoCancel()">
+    <button type="button" id="vfo-type-btn" onclick="vfoType()" title="Type a frequency">TYPE</button>
+    <button type="button" id="remote-tune-btn" onclick="toggleRemoteTune()"
+            title="Keys a low-power AM carrier for the remote autotuner (MFJ). Not the FTDX10 internal ATU.">REMOTE TUNE</button>
+  </div>
+  <div class="row">
+    <label>ATU</label>
+    <button type="button" id="atu-btn" onclick="toggleAtu()"
+            title="FTDX10 internal antenna tuner in line or bypassed (CAT AC001/AC000)">ATU</button>
+    <button type="button" id="atu-tune-btn" onclick="atuTune()"
+            title="Run the internal ATU match cycle (CAT AC002). Keys the radio briefly.">TUNE</button>
+    <span class="chip" id="atu-chip">—</span>
+  </div>
+  <div class="meters">
+    <span class="lbl">PO</span><div class="bar"><div class="fill" id="po-fill"></div></div><span class="num" id="po-num">—</span>
+    <span class="lbl">SWR</span><div class="bar"><div class="fill" id="swr-fill"></div></div><span class="num" id="swr-num">—.—</span>
+    <span class="lbl">ALC</span><div class="bar"><div class="fill" id="alc-fill"></div></div><span class="num" id="alc-num">—</span>
+  </div>
+  <div class="pwr-row">
+    <label title="The radio's power setting: where the ALC threshold sits, NOT what comes out. Leave it high.">PWR</label>
+    <input type="range" min="5" max="100" value="100" id="pwr-sl" oninput="pwrInput()">
+    <span id="pwr-val">100 W</span>
+  </div>
+  <div class="pwr-row">
+    <label title="Modem audio drive. THIS is what sets output power.">DRIVE</label>
+    <input type="range" min="0.005" max="1" step="0.005" value="0.05" id="lvl-sl" oninput="lvlInput()">
+    <span id="lvl-val">0.050</span>
+  </div>
+  <div id="tx-note" class="hint"></div>
+  <div class="row">
+    <label>MODE</label>
+    <select id="mode-sel" onchange="setMode()"></select>
+    <button type="button" id="enter-btn" onclick="toggleEnter()">ENTER</button>
+  </div>
+  <div class="row">
+    <label>CALLING</label>
+    <button type="button" onclick="qsy(7181000)">40m 7.181</button>
+    <button type="button" onclick="qsy(7177000)">40m 7.177</button>
+    <button type="button" onclick="qsy(14236000)">20m</button>
+    <button type="button" onclick="qsy(18118000)">17m</button>
+    <button type="button" onclick="qsy(21313000)">15m</button>
+    <button type="button" onclick="qsy(28330000)">10m</button>
+  </div>
+  <canvas id="spec" width="256" height="72" title="From Radio — modem baseband"></canvas>
+  <p class="hint" id="modes-hint"></p>
+</div>
+<div id="spots-wrap">
+  <h2 id="spots-title">SPOTS —</h2>
+  <div id="spots-scroll">
+    <table id="spots">
+      <thead><tr><th>CALL</th><th>MHZ</th><th>MODE</th><th>GRID</th></tr></thead>
+      <tbody id="spots-body"></tbody>
+    </table>
+  </div>
+</div>
+<div id="dock">
+  <button type="button" id="ptt">HOLD PTT</button>
+  <p class="hint">DATA-U above 10 MHz, DATA-L below — switched automatically as you tune.
+    PROC/DNR off while entered. Close VarAC/JTDX first.
+    <b>The ALC number to shoot for is zero</b>, not "barely moving": PWR is only
+    the ALC threshold, so leave it high and set power with DRIVE. FreeDV is a
+    high peak-to-average waveform and any ALC action clips peaks into IMD the
+    far end has to decode through. The guards drop PTT on SWR, on measured
+    watts out, and on a stuck key.</p>
+</div>
+<script>
+const MODE_ORDER = ['RADE', '700D', '1600', '700E', '2020'];
+let st = {};
+let ws = null;
+let ctx = null;
+let nextTime = 0;
+let clientSr = 48000;
+let ptt = false;
+let armed = false;
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = cls || '';
+}
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+  const r = await fetch(path, opt);
+  return r.json();
+}
+
+function paint(s) {
+  st = s || {};
+  const modem = st.modem || {};
+  const modes = st.modes || {};
+  const sel = document.getElementById('mode-sel');
+  if (!sel.dataset.ready) {
+    sel.innerHTML = MODE_ORDER.map(m => {
+      const ok = modes[m] ? '' : ' (build)';
+      return `<option value="${m}">${m}${ok}</option>`;
+    }).join('');
+    sel.value = (modem.requested_mode || modem.mode || 'RADE');
+    sel.dataset.ready = '1';
+  }
+  const codec = modem.mode || '—';
+  document.getElementById('codec-chip').textContent = 'CODEC ' + codec;
+  document.getElementById('codec-chip').classList.toggle('on', !!st.active);
+  const sync = modem.sync;
+  const sch = document.getElementById('sync-chip');
+  sch.textContent = sync ? 'SYNC' : 'SEARCH';
+  sch.classList.toggle('sync', !!sync);
+  document.getElementById('snr-chip').textContent = 'SNR ' +
+    (modem.snr != null ? modem.snr : '—');
+  document.getElementById('radio-chip').textContent =
+    (st.radio_mode || st.data_mode_for_vfo || '—');
+  document.getElementById('call').textContent = st.callsign || 'NOCALL';
+  const btn = document.getElementById('enter-btn');
+  btn.textContent = st.active ? 'EXIT' : 'ENTER';
+  btn.className = st.active ? 'live' : '';
+  const missing = MODE_ORDER.filter(m => modes[m] === false);
+  const hint = document.getElementById('modes-hint');
+  let t = '';
+  if (modem.fallback) t += modem.fallback + ' · ';
+  if (missing.length) t += 'Not built here: ' + missing.join(', ') + '.';
+  hint.textContent = t;
+  if (st.error) setStatus(st.error, 'err');
+  drawSpec(modem.spectrum || []);
+  paintSpots(st.reporter || {});
+  paintMeters(st);
+  const inv = document.getElementById('inv-btn');
+  if (inv) inv.className = modem.invert ? 'on' : '';
+  paintVfo(st.freq_a);
+  const rt = document.getElementById('remote-tune-btn');
+  rt.classList.toggle('on', !!st.tune_active);
+  rt.textContent = st.tune_active
+    ? '● TUNING ' + (st.tune_watts || 20) + 'W'
+    : 'REMOTE TUNE';
+  const atuBtn = document.getElementById('atu-btn');
+  atuBtn.classList.toggle('on', !!st.atu);
+  const atuTuneBtn = document.getElementById('atu-tune-btn');
+  atuTuneBtn.classList.toggle('tuning', !!st.atu_tuning);
+  atuTuneBtn.textContent = st.atu_tuning ? 'ABORT' : 'TUNE';
+  document.getElementById('atu-chip').textContent = st.atu_tuning
+    ? 'MATCHING' : (st.atu ? 'IN LINE' : 'BYPASS');
+  const pwr = document.getElementById('pwr-sl');
+  if (pwr && document.activeElement !== pwr && st.power) {
+    pwr.value = st.power;
+    document.getElementById('pwr-val').textContent = st.power + ' W';
+  }
+  const lvl = document.getElementById('lvl-sl');
+  if (lvl && document.activeElement !== lvl && st.tx_level) {
+    lvl.value = st.tx_level;
+    showLevel();
+  }
+  paintTxNote(st);
+  // A guard trip drops PTT server-side. Leaving the button lit would have the
+  // operator believe they are still on the air with an open mic.
+  if (ptt && st.tx_trip && !((st.modem || {}).ptt)) {
+    ptt = false;
+    document.getElementById('ptt').classList.remove('on');
+    setStatus(st.tx_trip, 'err');
+  }
+}
+
+// Show dBFS as well as the raw amplitude: the useful range is all down at the
+// bottom of the scale, where the few dB between sitting on the ALC and being
+// clear of it read as nothing at all in linear amplitude.
+function showLevel() {
+  const v = +document.getElementById('lvl-sl').value;
+  document.getElementById('lvl-val').textContent =
+    v.toFixed(3) + ' (' + (20 * Math.log10(v)).toFixed(1) + ' dBFS)';
+}
+
+// A trip, or what the meters said about the last over. FreeDV gives an
+// operator no other evidence that the transmitter actually radiated.
+function paintTxNote(s) {
+  const el = document.getElementById('tx-note');
+  if (!el) return;
+  if (s.tx_trip) {
+    el.innerHTML = '<b style="color:var(--red)">TX STOPPED — ' + esc(s.tx_trip) + '</b>';
+    return;
+  }
+  const m = s.tx_meters;
+  if (!m) { el.textContent = ''; return; }
+  let t = `LAST OVER · PO ${m.po_avg}W avg, ${m.po_peak}W peak · ALC ${m.alc_peak}% · SWR ${m.swr_peak}`;
+  if (m.po_peak < 2) {
+    t += ' — no measurable RF: check DATA MOD SOURCE, REAR SELECT and the DATA port gain.';
+  } else if (m.alc_peak > 10) {
+    t += ' — the radio is limiting, not you. Lower DRIVE until the ALC sits at zero.';
+  }
+  el.textContent = t;
+}
+
+function paintSpots(rep) {
+  const title = document.getElementById('spots-title');
+  const n = (rep.count || 0);
+  const tx = (rep.tx || 0);
+  const conn = rep.connected ? 'live' : 'down';
+  let me = '';
+  if (rep.reporting && rep.callsign) {
+    me = ` · ${rep.callsign} ${rep.grid}${rep.visible ? ' ON AIR' : ' hidden'}`;
+  } else {
+    me = ' · not spotting';
+  }
+  title.textContent = `SPOTS ${n} · TX ${tx} · ${conn}${me}`;
+  const body = document.getElementById('spots-body');
+  const rows = rep.stations || [];
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="4">No stations yet — reporter connecting…</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.slice(0, 40).map(r => {
+    const txm = r.tx ? ' tx' : '';
+    const mode = (r.mode || '').replace('RADEV1', 'RADE');
+    const msg = r.message ? `<div class="msg">${esc(r.message)}</div>` : '';
+    const extra = r.tx ? ' TX' : (r.rx_callsign ? ` rx ${esc(r.rx_callsign)}` : '');
+    return `<tr class="${txm.trim()}" onclick="qsy(${r.hz || 0})">
+      <td>${esc(r.callsign)}${extra}</td>
+      <td>${r.mhz ? r.mhz.toFixed(3) : '—'}</td>
+      <td>${esc(mode)}</td>
+      <td>${esc(r.grid)}${msg}</td>
+    </tr>`;
+  }).join('');
+}
+
+function esc(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+const METER_CAL = {
+  PO:  { full_raw: 205, cal: [[0,0],[27,5],[94,25],[147,50],[176,75],[205,100]] },
+  ALC: { full_raw: 64,  cal: [[0,0],[64,100]] },
+  SWR: { full_raw: 236, cal: [[0,1.0],[26,1.2],[52,1.5],[89,2.0],[126,3.0],[173,4.0],[236,5.0],[255,25.0]] },
+};
+function calInterp(cal, x) {
+  if (!cal || !cal.length) return 0;
+  if (x <= cal[0][0]) return cal[0][1];
+  if (x >= cal[cal.length-1][0]) return cal[cal.length-1][1];
+  for (let i = 0; i < cal.length-1; i++) {
+    const a = cal[i], b = cal[i+1];
+    if (a[0] <= x && x <= b[0]) {
+      const span = b[0]-a[0];
+      return span === 0 ? a[1] : a[1] + (b[1]-a[1])*(x-a[0])/span;
+    }
+  }
+  return cal[cal.length-1][1];
+}
+function paintMeters(s) {
+  const tx = !!s.is_tx;
+  const poRaw = s.power_meter || 0;
+  const alcRaw = s.alc_meter || 0;
+  const swrRaw = s.swr_meter || 0;
+  const hasRf = tx && poRaw >= 3;
+  const poW = hasRf ? Math.round(calInterp(METER_CAL.PO.cal, poRaw)) : 0;
+  const alc = hasRf ? Math.round(calInterp(METER_CAL.ALC.cal, alcRaw)) : 0;
+  let swr = null;
+  if (hasRf) swr = swrRaw <= 0 ? 1.0 : calInterp(METER_CAL.SWR.cal, swrRaw);
+  const poFrac = Math.max(0, Math.min(1, poRaw / METER_CAL.PO.full_raw));
+  const alcFrac = Math.max(0, Math.min(1, alcRaw / METER_CAL.ALC.full_raw));
+  const swrFrac = Math.max(0, Math.min(1, swrRaw / METER_CAL.SWR.full_raw));
+  document.getElementById('po-fill').style.width = (hasRf ? poFrac*100 : 0) + '%';
+  document.getElementById('alc-fill').style.width = (hasRf ? alcFrac*100 : 0) + '%';
+  document.getElementById('swr-fill').style.width = (hasRf ? swrFrac*100 : 0) + '%';
+  document.getElementById('swr-fill').classList.toggle('hot', swr != null && swr >= 2);
+  // Zero is the target, so the ALC bar is not "fine until it is nearly full".
+  // Anything past meter noise means the radio took the drive control away.
+  document.getElementById('alc-fill').classList.toggle('hot', hasRf && alc > 10);
+  document.getElementById('po-num').textContent = hasRf ? poW + 'W' : (tx ? '…' : '—');
+  document.getElementById('alc-num').textContent = hasRf ? String(alc) : (tx ? '…' : '—');
+  const swrEl = document.getElementById('swr-num');
+  swrEl.textContent = hasRf && swr != null ? swr.toFixed(1) : (tx ? '…' : '—.—');
+  swrEl.style.color = (swr != null && swr >= 2) ? 'var(--red)' : 'var(--gbright)';
+}
+
+async function pwrInput() {
+  const v = +document.getElementById('pwr-sl').value;
+  document.getElementById('pwr-val').textContent = v + ' W';
+  // While entered this goes through the session so the clamp it restores on
+  // exit stays the operator's number, not a stale one.
+  if (st.active) await api('/api/freedv/watts', { watts: v });
+  else await api('/api/power', { watts: v });
+}
+
+let lvlTimer = null;
+async function lvlInput() {
+  showLevel();
+  const v = +document.getElementById('lvl-sl').value;
+  clearTimeout(lvlTimer);
+  lvlTimer = setTimeout(() => api('/api/freedv/level', { level: v }), 80);
+}
+
+async function toggleInvert() {
+  const on = !((st.modem || {}).invert);
+  const s = await api('/api/freedv/invert', { on });
+  paint(s);
+}
+
+function drawSpec(bins) {
+  const c = document.getElementById('spec');
+  const g = c.getContext('2d');
+  g.fillStyle = '#050c05';
+  g.fillRect(0, 0, c.width, c.height);
+  if (!bins.length) return;
+  const w = c.width / bins.length;
+  g.fillStyle = '#33ff99';
+  for (let i = 0; i < bins.length; i++) {
+    const h = (bins[i] / 255) * c.height;
+    g.fillRect(i * w, c.height - h, Math.max(1, w - 1), h);
+  }
+}
+
+async function refresh() {
+  try {
+    const s = await api('/api/freedv');
+    paint(s);
+    if (s.active && !ws) connectAudio();
+  } catch (e) {
+    setStatus('status failed', 'err');
+  }
+}
+
+async function toggleEnter() {
+  setStatus(st.active ? 'exiting…' : 'entering…');
+  const s = st.active
+    ? await api('/api/freedv/exit', {})
+    : await api('/api/freedv/enter', { mode: document.getElementById('mode-sel').value });
+  paint(s);
+  if (s.ok && s.active) {
+    setStatus('FreeDV entered · ' + ((s.modem && s.modem.mode) || ''), 'live');
+    connectAudio();
+  } else if (s.ok) {
+    stopAudio();
+    setStatus('idle');
+  } else {
+    setStatus(s.error || 'failed', 'err');
+  }
+}
+
+async function setMode() {
+  const mode = document.getElementById('mode-sel').value;
+  const s = await api('/api/freedv/mode', { mode });
+  paint(s);
+}
+
+async function qsy(hz) {
+  if (!hz) return;
+  const s = await api('/api/freedv/qsy', { hz });
+  paint(s);
+  setStatus('QSY ' + (hz/1e6).toFixed(3) + ' · ' + (s.mode || ''), st.active ? 'live' : '');
+}
+
+/* ── Compact VFO ───────────────────────────────────────────────────────
+   Nine digits, tap top half up / bottom half down, wheel to spin — the same
+   gesture as the main rig page so muscle memory carries over. The radio is
+   the source of truth; local edits are optimistic and the next status frame
+   corrects them. Sideband (DATA-U/DATA-L) follows on the server. */
+const DIGIT_STEPS = [1e8, 1e7, 1e6, 1e5, 1e4, 1e3, 1e2, 1e1, 1e0];
+let vfoHz = 0;
+let vfoHold = 0;
+
+function paintVfo(hz, local) {
+  const el = document.getElementById('vfo');
+  if (!el || el.dataset.editing === '1') return;
+  // A status frame in flight still carries the old frequency; let a local
+  // step stand until the radio has had time to answer, or digits stutter.
+  if (!local && Date.now() < vfoHold) return;
+  const n = Math.round(Number(hz) || 0);
+  if (!n) { el.dataset.digits = ''; el.textContent = '—'; return; }
+  vfoHz = n;
+  const digits = String(Math.max(0, Math.min(999999999, n))).padStart(9, '0');
+  if (el.dataset.digits === digits && el.childElementCount > 0) return;
+  el.dataset.digits = digits;
+  el.innerHTML = '';
+  let lead = true;
+  for (let i = 0; i < 9; i++) {
+    if (i === 3 || i === 6) {
+      const sep = document.createElement('span');
+      sep.className = 'fsep';
+      sep.textContent = '.';
+      el.appendChild(sep);
+    }
+    if (digits[i] !== '0') lead = false;
+    const d = document.createElement('span');
+    d.className = 'fdig' + (lead && i < 2 ? ' lead' : '');
+    d.dataset.idx = String(i);
+    d.textContent = digits[i];
+    d.addEventListener('pointerdown', vfoDigitDown);
+    d.addEventListener('wheel', vfoDigitWheel, { passive: false });
+    d.addEventListener('dblclick', (e) => { e.preventDefault(); });
+    el.appendChild(d);
+  }
+}
+
+function vfoDigitDown(e) {
+  e.preventDefault();
+  const el = e.currentTarget;
+  const r = el.getBoundingClientRect();
+  const dir = (e.clientY - r.top) < r.height / 2 ? 1 : -1;
+  vfoStep(dir * DIGIT_STEPS[+el.dataset.idx]);
+}
+
+function vfoDigitWheel(e) {
+  e.preventDefault();
+  vfoStep((e.deltaY < 0 ? 1 : -1) * DIGIT_STEPS[+e.currentTarget.dataset.idx]);
+}
+
+let vfoTimer = null;
+function vfoStep(delta) {
+  const hz = Math.max(30000, Math.min(75000000, (vfoHz || 0) + delta));
+  if (hz === vfoHz) return;
+  vfoHz = hz;
+  vfoHold = Date.now() + 900;
+  document.getElementById('vfo').dataset.digits = '';
+  paintVfo(hz, true);
+  clearTimeout(vfoTimer);
+  vfoTimer = setTimeout(() => setFreq(hz), 80);
+}
+
+async function setFreq(hz) {
+  const s = await api('/api/freedv/qsy', { hz });
+  vfoHold = 0;
+  paint(s);
+}
+
+function vfoType() {
+  const el = document.getElementById('vfo');
+  const inp = document.getElementById('vfo-in');
+  el.dataset.editing = '1';
+  el.style.display = 'none';
+  inp.hidden = false;
+  inp.value = '';
+  inp.focus();
+}
+
+function vfoCancel() {
+  const el = document.getElementById('vfo');
+  const inp = document.getElementById('vfo-in');
+  inp.hidden = true;
+  el.style.display = '';
+  delete el.dataset.editing;
+  el.dataset.digits = '';
+  paintVfo(vfoHz, true);
+}
+
+function vfoKey(e) {
+  if (e.key === 'Escape') { vfoCancel(); return; }
+  if (e.key !== 'Enter') return;
+  const raw = parseFloat(e.currentTarget.value);
+  vfoCancel();
+  if (!isFinite(raw) || raw <= 0) return;
+  // Bare number: MHz under 100, kHz under 100000, else Hz.
+  const hz = raw < 100 ? Math.round(raw * 1e6)
+           : raw < 100000 ? Math.round(raw * 1e3)
+           : Math.round(raw);
+  if (hz < 30000 || hz > 75000000) { setStatus('out of range', 'err'); return; }
+  setFreq(hz);
+}
+
+/* Internal ATU — the radio's own tuner, nothing to do with the MFJ above.
+   ATU puts it in line or bypasses it; TUNE runs a match cycle, which keys
+   the radio for a second or two on its own. */
+async function toggleAtu() {
+  const on = !st.atu;
+  const r = await api('/api/atu', { on });
+  if (r.ok === false) setStatus(r.error || 'ATU failed', 'err');
+  else setStatus('internal ATU ' + (on ? 'in line' : 'bypassed'));
+  await refresh();
+}
+
+async function atuTune() {
+  const r = await api('/api/atu/tune', {});
+  if (r.ok === false) { setStatus(r.error || 'ATU tune failed', 'err'); return; }
+  setStatus(r.atu_tuning ? 'internal ATU matching…' : 'ATU tune stopped',
+            r.atu_tuning ? 'live' : '');
+  await refresh();
+}
+
+async function toggleRemoteTune() {
+  const on = !st.tune_active;
+  if (on && ptt) pttOff();
+  setStatus(on ? 'keying tune carrier…' : 'tune off');
+  const r = await api('/api/tune', { on, watts: st.tune_watts || 20 });
+  if (r.ok === false) { setStatus(r.error || 'TUNE failed', 'err'); }
+  else { setStatus(on ? 'REMOTE TUNE — carrier up' : 'tune off', on ? 'live' : ''); }
+  await refresh();
+}
+
+function connectAudio() {
+  if (ws && ws.readyState <= 1) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws/freedv`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => setStatus('audio up', 'live');
+  ws.onerror = () => setStatus('audio error', 'err');
+  ws.onclose = () => { ws = null; };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === 'string') {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'hello' || msg.type === 'status' || msg.type === 'ptt') paint(msg);
+        if (msg.type === 'error') setStatus(msg.error, 'err');
+      } catch (_) {}
+      return;
+    }
+    playPcm(ev.data);
+  };
+}
+
+function stopAudio() {
+  if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+  if (ctx) { try { ctx.close(); } catch (_) {} ctx = null; }
+}
+
+function resampleFloat(f32, inSr, outSr) {
+  if (inSr === outSr) return f32;
+  const nOut = Math.max(1, Math.round(f32.length * outSr / inSr));
+  const out = new Float32Array(nOut);
+  const step = inSr / outSr;
+  for (let i = 0; i < nOut; i++) {
+    const x = i * step;
+    const j = Math.floor(x);
+    const f = x - j;
+    const a = f32[j] || 0;
+    const b = f32[Math.min(j + 1, f32.length - 1)] || 0;
+    out[i] = a + (b - a) * f;
+  }
+  return out;
+}
+
+function playPcm(buf) {
+  if (ptt) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!ctx) {
+    // Device native rate. Safari ignores AudioBuffer.sampleRate of 16000
+    // and plays it at 48 kHz — that is the "sped up / chipmunk" decode.
+    ctx = new AC();
+    nextTime = 0;
+  }
+  const i16 = new Int16Array(buf);
+  if (!i16.length) return;
+  const f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+  const play = resampleFloat(f32, 16000, ctx.sampleRate || 48000);
+  const src = ctx.createBuffer(1, play.length, ctx.sampleRate);
+  src.getChannelData(0).set(play);
+  const n = ctx.createBufferSource();
+  n.buffer = src;
+  n.connect(ctx.destination);
+  const t = Math.max(ctx.currentTime + 0.04, nextTime);
+  n.start(t);
+  nextTime = t + src.duration;
+}
+
+async function ensureMic() {
+  if (armed) return true;
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = 'play-and-record';
+  } catch (_) {}
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
+    video: false,
+  });
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!ctx) ctx = new AC();
+  if (ctx.state === 'suspended') await ctx.resume();
+  clientSr = ctx.sampleRate || 48000;
+  const src = ctx.createMediaStreamSource(stream);
+  const proc = ctx.createScriptProcessor(2048, 1, 1);
+  proc.onaudioprocess = (e) => {
+    if (!ptt || !ws || ws.readyState !== 1) return;
+    const input = e.inputBuffer.getChannelData(0);
+    const i16 = new Int16Array(input.length);
+    for (let i = 0; i < input.length; i++) {
+      let v = input[i];
+      if (v > 1) v = 1; else if (v < -1) v = -1;
+      i16[i] = v * 32767;
+    }
+    ws.send(i16.buffer);
+  };
+  const mute = ctx.createGain();
+  mute.gain.value = 0;
+  src.connect(proc);
+  proc.connect(mute);
+  mute.connect(ctx.destination);
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'hello', sample_rate: clientSr }));
+  }
+  armed = true;
+  return true;
+}
+
+async function pttOn() {
+  if (!st.active) { setStatus('enter FreeDV first', 'err'); return; }
+  if (st.tune_active) { setStatus('REMOTE TUNE is active', 'err'); return; }
+  try { await ensureMic(); } catch (e) {
+    setStatus('mic denied', 'err'); return;
+  }
+  ptt = true;
+  document.getElementById('ptt').classList.add('on');
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ptt', on: true }));
+  else await api('/api/freedv/ptt', { on: true });
+}
+
+async function pttOff() {
+  ptt = false;
+  document.getElementById('ptt').classList.remove('on');
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ptt', on: false }));
+  else await api('/api/freedv/ptt', { on: false });
+}
+
+const pttBtn = document.getElementById('ptt');
+pttBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); pttOn(); });
+pttBtn.addEventListener('pointerup', (e) => { e.preventDefault(); pttOff(); });
+pttBtn.addEventListener('pointercancel', () => pttOff());
+pttBtn.addEventListener('pointerleave', () => { if (ptt) pttOff(); });
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !e.repeat) { e.preventDefault(); pttOn(); }
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); pttOff(); }
+});
+
+setInterval(() => {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' }));
+  else refresh();
+}, 500);
+refresh();
+</script>
+</body>
+</html>

@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>CyberRig FT8</title>
+<style>
+:root{
+  --bg:#000; --fg:#d8e0d8; --dim:#5a6b5a; --line:#1a2a1a;
+  --green:#00ff41; --yellow:#ffe000; --red:#ff2d2d; --cyan:#37d5e0;
+  --need:#ffe000; --watch:#ff2d2d; --conf:#2c4030; --unk:#3a3a3a;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:14px;overscroll-behavior:none}
+body{display:flex;flex-direction:column;
+  padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+
+/* ---------- status strip ---------- */
+#status{flex:0 0 auto;padding:6px 10px 4px;border-bottom:1px solid var(--line)}
+.row1{display:flex;align-items:baseline;gap:8px}
+#dial{font-size:20px;font-weight:600;letter-spacing:.5px;color:var(--fg)}
+#mode{font-size:11px;color:var(--dim)}
+#rxdot{margin-left:auto;font-size:11px;color:var(--green)}
+#rxdot.stale{color:var(--red)}
+.row2{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11px;color:var(--dim)}
+#cyclebar{flex:1;height:3px;background:var(--line);border-radius:2px;overflow:hidden}
+#cyclefill{height:100%;width:0;background:var(--green);transition:width .2s linear}
+
+/* ---------- meters ---------- */
+#meters{flex:0 0 auto;display:flex;gap:0;border-bottom:1px solid var(--line);
+  font-size:11px}
+.m{flex:1 1 0;padding:5px 4px;text-align:center;border-right:1px solid #0d160d}
+.m:last-child{border-right:0}
+.m b{display:block;font-size:14px;font-weight:600;color:var(--fg);line-height:1.25}
+.m span{color:var(--dim);font-size:9px;letter-spacing:.08em}
+.m.hot b{color:var(--red)}
+.m.warn b{color:var(--yellow)}
+#xitbar{flex:0 0 auto;display:none;padding:5px 10px;background:#3a2a00;
+  color:var(--yellow);font-size:11px;font-weight:600;letter-spacing:.04em;
+  align-items:center;gap:8px}
+#xitbar.on{display:flex}
+#xitclr{margin-left:auto;border:1px solid var(--yellow);color:var(--yellow);
+  background:transparent;border-radius:10px;padding:2px 9px;font-size:10px}
+
+/* ---------- tx bar ---------- */
+#txbar{flex:0 0 auto;display:flex;align-items:stretch;gap:8px;padding:8px 10px 4px;
+  border-top:1px solid var(--line)}
+#txbar button{flex:1 1 0;border-radius:8px;font-family:var(--mono);font-size:14px;
+  font-weight:700;letter-spacing:.06em;padding:14px 0;border:1px solid var(--line);
+  background:transparent;color:var(--dim)}
+#arm.on{background:var(--green);border-color:var(--green);color:#000}
+#halt{flex:0 0 108px;border-color:var(--red);color:var(--red)}
+#halt:active{background:var(--red);color:#000}
+#slotrow{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 10px 6px;
+  font-size:11px;color:var(--dim)}
+#slotval{color:var(--cyan);font-weight:600}
+#trip{flex:0 0 auto;display:none;padding:8px 10px;font-size:11px;line-height:1.45}
+#trip.on{display:block}
+#trip.urgent{background:#3a0000;color:#ff8080}
+#trip.soft{background:#2a2200;color:var(--yellow)}
+
+/* ---------- filter chips ---------- */
+#chips{flex:0 0 auto;display:flex;gap:6px;padding:7px 10px;border-bottom:1px solid var(--line);
+  align-items:center}
+.chip{padding:5px 12px;border:1px solid var(--line);border-radius:14px;font-size:12px;
+  color:var(--dim);background:transparent;cursor:pointer;white-space:nowrap}
+.chip.on{color:#000;background:var(--green);border-color:var(--green);font-weight:600}
+#count{margin-left:auto;font-size:11px;color:var(--dim)}
+
+/* ---------- decode list ---------- */
+#list{flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+.d{display:flex;align-items:center;gap:8px;padding:9px 10px 9px 0;
+  border-bottom:1px solid #0d160d;min-height:44px}
+.bar{flex:0 0 4px;align-self:stretch;background:var(--unk)}
+.d.needed   .bar{background:var(--need)}
+.d.watchlist .bar{background:var(--watch)}
+.d.confirmed .bar{background:var(--conf)}
+.call{flex:0 0 auto;min-width:86px;font-weight:600;font-size:15px}
+.d.needed .call{color:var(--need)}
+.d.watchlist .call{color:var(--watch)}
+.ent{flex:1 1 auto;font-size:11px;color:var(--dim);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.snr{flex:0 0 34px;text-align:right;font-size:13px}
+.snr.s-strong{color:var(--green)} .snr.s-mid{color:var(--fg)} .snr.s-weak{color:var(--dim)}
+.hz{flex:0 0 46px;text-align:right;font-size:11px;color:var(--dim);padding-right:10px}
+.cqtag{flex:0 0 auto;font-size:10px;color:var(--cyan);padding-right:2px}
+.d.sel{background:#0d1a0d}
+#empty{padding:28px 16px;text-align:center;color:var(--dim);font-size:12px;line-height:1.6}
+
+/* ---------- waterfall bottom sheet ---------- */
+#sheet{flex:0 0 auto;background:#000;border-top:1px solid var(--line);
+  transition:height .22s cubic-bezier(.3,.8,.4,1);height:26px;overflow:hidden;
+  display:flex;flex-direction:column;touch-action:none}
+#grab{flex:0 0 26px;display:flex;align-items:center;justify-content:center;cursor:grab}
+#grab::before{content:"";width:38px;height:4px;border-radius:2px;background:#2a3a2a}
+#wfwrap{flex:1 1 auto;position:relative;overflow:hidden}
+#ruler{position:absolute;top:0;left:0;width:100%;height:16px;z-index:2;pointer-events:none}
+#wf{position:absolute;top:16px;left:0;width:100%;height:calc(100% - 16px);display:block}
+#wfmsg{position:absolute;inset:16px 0 0 0;display:flex;align-items:center;justify-content:center;
+  color:var(--dim);font-size:11px;text-align:center;padding:0 20px;line-height:1.5}
+#cursor{position:absolute;top:16px;bottom:0;width:1px;background:var(--cyan);
+  opacity:0;transition:opacity .25s;pointer-events:none;z-index:3}
+#cursor.on{opacity:.85;transition:none}
+#cursorlab{position:absolute;top:18px;font-size:10px;color:var(--cyan);
+  background:rgba(0,0,0,.75);padding:1px 4px;opacity:0;z-index:3;pointer-events:none}
+#cursorlab.on{opacity:1}
+#zoomlab{position:absolute;right:6px;bottom:4px;font-size:10px;color:var(--dim);
+  background:rgba(0,0,0,.6);padding:1px 5px;z-index:3;pointer-events:none;opacity:0;
+  transition:opacity .4s}
+#zoomlab.on{opacity:1;transition:none}
+</style>
+</head>
+<body>
+
+<div id="status">
+  <div class="row1">
+    <span id="dial">--.---</span>
+    <span id="mode">FT8</span>
+    <span id="rxdot">● RX</span>
+  </div>
+  <div class="row2">
+    <span id="cyclenum">--</span>
+    <div id="cyclebar"><div id="cyclefill"></div></div>
+    <span id="floor">--</span>
+  </div>
+</div>
+
+
+<div id="meters">
+  <div class="m" id="m-swr"><b>--</b><span>SWR</span></div>
+  <div class="m" id="m-alc"><b>--</b><span>ALC</span></div>
+  <div class="m" id="m-po"><b>--</b><span>PO</span></div>
+  <div class="m" id="m-rfg"><b>--</b><span>RFG</span></div>
+</div>
+
+<div id="xitbar">
+  <span>TX OFFSET <b id="xitval">0</b> Hz</span>
+  <button id="xitclr">CLEAR</button>
+</div>
+
+<div id="trip"></div>
+
+<div id="chips">
+  <button class="chip on" data-f="all">ALL</button>
+  <button class="chip" data-f="cq">CQ</button>
+  <button class="chip" data-f="need">NEED</button>
+  <span id="count">0</span>
+</div>
+
+<div id="list"><div id="empty">waiting for decodes…</div></div>
+
+<div id="slotrow">
+  <span>TX SLOT <span id="slotval">JTDX</span></span>
+  <span id="jtdxstate" style="margin-left:auto"></span>
+</div>
+
+<div id="txbar">
+  <button id="arm">ARM TX</button>
+  <button id="halt">HALT</button>
+</div>
+
+<div id="sheet">
+  <div id="grab"></div>
+  <div id="wfwrap">
+    <canvas id="ruler"></canvas>
+    <canvas id="wf"></canvas>
+    <div id="cursor"></div>
+    <div id="cursorlab"></div>
+    <div id="zoomlab"></div>
+    <div id="wfmsg">waterfall idle</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ================= ZL1FZ palette =================
+   Nine stops from /usr/share/jtdx/Palettes/ZL1FZ.pal, interpolated to 256.
+   The first four are black, so levels 0-96 are crushed dead -- that hard floor
+   is the whole character of this palette and the reason the server tracks the
+   noise floor for us instead of offering a gain slider. */
+const ZL1FZ = [[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,255,0],[255,255,0],[255,255,0],[255,255,0],[255,0,0]];
+const LUT = new Uint32Array(256);
+(function buildLUT(){
+  const n = ZL1FZ.length - 1;
+  for (let i=0;i<256;i++){
+    const x = i/255*n, k = Math.min(Math.floor(x), n-1), f = x-k;
+    const a = ZL1FZ[k], b = ZL1FZ[k+1];
+    const r = Math.round(a[0]+(b[0]-a[0])*f);
+    const g = Math.round(a[1]+(b[1]-a[1])*f);
+    const bl= Math.round(a[2]+(b[2]-a[2])*f);
+    LUT[i] = (255<<24) | (bl<<16) | (g<<8) | r;   // little-endian RGBA
+  }
+})();
+
+/* ================= state ================= */
+const S = {
+  decodes: [], filter:"all", sel:null,
+  wf:null, bins:0, hzPerBin:2.93, fLo:200, fHi:3200,
+  viewLo:0, viewHi:0,          // bin window currently shown
+  // One ring row is drawn into one DEVICE pixel, so history depth is bounded by
+  // the canvas height in device pixels -- 1800 rows at 5/sec is 6 minutes, enough
+  // to fill the tall detent on a DPR-3 phone without ever resampling in time.
+  ring:null, ringCtx:null, ringRows:1800, wp:0, filled:0,
+  rowImg:null, dial:null, lastRowAt:0, pinnedHz:null,
+};
+
+const $ = s => document.querySelector(s);
+const listEl=$("#list"), sheet=$("#sheet"), wfCanvas=$("#wf"), ruler=$("#ruler");
+const cursor=$("#cursor"), cursorLab=$("#cursorlab"), zoomLab=$("#zoomlab"), wfmsg=$("#wfmsg");
+
+/* ================= bottom sheet: 3 detents ================= */
+// Peek and full. The waterfall draws one row per device pixel, so on a DPR-3
+// phone every 15 CSS points of sheet height buys another second of history:
+// peek holds ~1.7 min, full ~4.8 min on a 844pt screen. Taller is the entire
+// point -- the sheet gets pulled up to look BACK in time, and the decode list
+// is still right there underneath it.
+const DETENTS = () => [26, 210, Math.round(window.innerHeight*0.62)];
+let detent = 0;
+function setDetent(i, animate=true){
+  detent = Math.max(0, Math.min(2, i));
+  sheet.style.transition = animate ? "" : "none";
+  sheet.style.height = DETENTS()[detent] + "px";
+  if (!animate) requestAnimationFrame(()=>sheet.style.transition="");
+  setTimeout(sizeCanvases, animate?230:0);
+}
+$("#grab").addEventListener("click", ()=> setDetent((detent+1)%3));
+
+let dragY=null, dragH=0;
+sheet.addEventListener("touchstart", e=>{
+  if (e.target.closest("#grab") || detent===0){ dragY=e.touches[0].clientY; dragH=sheet.offsetHeight;
+    sheet.style.transition="none"; }
+}, {passive:true});
+sheet.addEventListener("touchmove", e=>{
+  if (dragY===null) return;
+  const h = Math.max(26, Math.min(window.innerHeight*0.7, dragH + (dragY-e.touches[0].clientY)));
+  sheet.style.height = h+"px";
+}, {passive:true});
+sheet.addEventListener("touchend", ()=>{
+  if (dragY===null) return;
+  dragY=null; sheet.style.transition="";
+  const h = sheet.offsetHeight, d = DETENTS();
+  let best=0, bd=1e9;
+  d.forEach((v,i)=>{ const x=Math.abs(v-h); if(x<bd){bd=x;best=i;} });
+  setDetent(best);
+  sizeCanvases();
+});
+
+/* ================= canvas sizing (device pixels) ================= */
+function sizeCanvases(){
+  const dpr = window.devicePixelRatio || 1;
+  const w = wfCanvas.clientWidth, h = wfCanvas.clientHeight;
+  if (w<=0 || h<=0) return;
+  wfCanvas.width = Math.round(w*dpr); wfCanvas.height = Math.round(h*dpr);
+  ruler.width = Math.round(ruler.clientWidth*dpr); ruler.height = Math.round(16*dpr);
+  drawRuler(); blit();
+}
+window.addEventListener("resize", ()=>{ setDetent(detent,false); });
+
+/* ================= waterfall ring ================= */
+function initRing(bins){
+  S.bins = bins;
+  S.viewLo = 0; S.viewHi = bins;
+  S.ring = document.createElement("canvas");
+  S.ring.width = bins; S.ring.height = S.ringRows;
+  S.ringCtx = S.ring.getContext("2d", {alpha:false, willReadFrequently:false});
+  S.ringCtx.fillStyle = "#000"; S.ringCtx.fillRect(0,0,bins,S.ringRows);
+  S.rowImg = S.ringCtx.createImageData(bins, 1);
+  S.wp = 0; S.filled = 0;
+  wfmsg.style.display = "none";
+}
+
+function pushRow(levels){
+  if (!S.ring) return;
+  const buf = new Uint32Array(S.rowImg.data.buffer);
+  for (let i=0;i<levels.length;i++) buf[i] = LUT[levels[i]];
+  S.ringCtx.putImageData(S.rowImg, 0, S.wp);
+  S.wp = (S.wp+1) % S.ringRows;
+  if (S.filled < S.ringRows) S.filled++;
+  S.lastRowAt = performance.now();
+  blit();
+}
+
+/* Newest row at the TOP, scrolling down -- same direction as JTDX.
+
+   Rows are written into the ring in increasing index order, so a straight
+   drawImage would put the OLDEST at the top. Each run is therefore drawn under a
+   vertical flip, which also means we never blit the visible canvas onto itself:
+   doing that accumulates resampling error and smears the picture over minutes.
+
+   At most two runs (the ring wraps), so this is O(1) per frame no matter how
+   deep the history is. */
+function drawRun(ctx, srcY, count, destY, W, sx, sw){
+  if (count <= 0) return;
+  ctx.save();
+  ctx.translate(0, destY + count);
+  ctx.scale(1, -1);
+  ctx.drawImage(S.ring, sx, srcY, sw, count, 0, 0, W, count);
+  ctx.restore();
+}
+
+function blit(){
+  if (!S.ring || !wfCanvas.width) return;
+  const ctx = wfCanvas.getContext("2d", {alpha:false});
+  const W = wfCanvas.width, H = wfCanvas.height;
+  const sx = S.viewLo, sw = Math.max(1, S.viewHi - S.viewLo);
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = "#000"; ctx.fillRect(0,0,W,H);
+
+  const rows = Math.min(S.filled, H, S.ringRows);
+  if (rows <= 0) return;
+  const newest = (S.wp - 1 + S.ringRows) % S.ringRows;
+
+  // Run A: ring rows [newest-lenA+1 .. newest] -> dest rows [0 .. lenA-1].
+  const lenA = Math.min(rows, newest + 1);
+  drawRun(ctx, newest - lenA + 1, lenA, 0, W, sx, sw);
+
+  // Run B: the wrap, older still, taken from the end of the ring.
+  const lenB = rows - lenA;
+  drawRun(ctx, S.ringRows - lenB, lenB, lenA, W, sx, sw);
+}
+
+function drawRuler(){
+  if (!ruler.width) return;
+  const ctx = ruler.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const W = ruler.width, H = ruler.height;
+  ctx.clearRect(0,0,W,H);
+  if (!S.bins) return;
+  const loHz = S.fLo + S.viewLo*S.hzPerBin;
+  const hiHz = S.fLo + S.viewHi*S.hzPerBin;
+  const span = hiHz - loHz;
+  // Pick a tick step that yields 4-7 labels across whatever span is showing.
+  const steps = [100,200,250,500,1000];
+  let step = steps.find(s => span/s <= 7) || 1000;
+  ctx.font = `${Math.round(9*dpr)}px ui-monospace,Menlo,monospace`;
+  ctx.textBaseline = "top";
+  for (let f = Math.ceil(loHz/step)*step; f <= hiHz; f += step){
+    const x = (f - loHz)/span * W;
+    ctx.fillStyle = "#243424"; ctx.fillRect(x, H*0.55, Math.max(1,dpr*0.7), H*0.45);
+    ctx.fillStyle = "#5a6b5a";
+    const label = String(f);
+    const tw = ctx.measureText(label).width;
+    let lx = x - tw/2;
+    lx = Math.max(2, Math.min(W - tw - 2, lx));
+    ctx.fillText(label, lx, H*0.05);
+  }
+}
+
+/* ================= pinch to magnify / drag to pan =================
+   The full span already fits at one bin per device pixel, so zoom is not for
+   fitting data -- a 50 Hz FT8 signal is ~17 device pixels, easy to see and
+   impossible to hit with a finger. Magnification exists for touch targeting. */
+let pinch=null, pan=null;
+function clampView(){
+  const minSpan = 64;
+  let span = Math.max(minSpan, Math.min(S.bins, S.viewHi - S.viewLo));
+  let lo = Math.max(0, Math.min(S.bins - span, S.viewLo));
+  S.viewLo = Math.round(lo); S.viewHi = Math.round(lo + span);
+  const z = S.bins / (S.viewHi - S.viewLo);
+  zoomLab.textContent = z <= 1.02 ? "full span" : z.toFixed(1)+"×";
+  zoomLab.classList.add("on");
+  clearTimeout(zoomLab._t); zoomLab._t = setTimeout(()=>zoomLab.classList.remove("on"), 1200);
+}
+function dist(t){ const dx=t[0].clientX-t[1].clientX, dy=t[0].clientY-t[1].clientY;
+  return Math.hypot(dx,dy)||1; }
+
+wfCanvas.addEventListener("touchstart", e=>{
+  if (e.touches.length===2){
+    pinch = {d:dist(e.touches), lo:S.viewLo, hi:S.viewHi,
+             cx:(e.touches[0].clientX+e.touches[1].clientX)/2};
+    pan=null;
+  } else if (e.touches.length===1){
+    pan = {x:e.touches[0].clientX, lo:S.viewLo, hi:S.viewHi,
+           t:Date.now(), moved:false};
+    longPressTimer = setTimeout(()=>showCursor(e.touches[0].clientX), 260);
+  }
+}, {passive:true});
+
+let longPressTimer=null;
+wfCanvas.addEventListener("touchmove", e=>{
+  clearTimeout(longPressTimer);
+  const rect = wfCanvas.getBoundingClientRect();
+  if (pinch && e.touches.length===2){
+    S.pinnedHz = null;
+    const scale = dist(e.touches)/pinch.d;
+    const span0 = pinch.hi - pinch.lo;
+    const span = span0/scale;
+    const frac = (pinch.cx - rect.left)/rect.width;
+    const anchor = pinch.lo + span0*frac;
+    S.viewLo = anchor - span*frac; S.viewHi = S.viewLo + span;
+    clampView(); drawRuler(); blit();
+  } else if (pan && e.touches.length===1){
+    if (cursorVisible){ showCursor(e.touches[0].clientX); return; }
+    const span = pan.hi - pan.lo;
+    const dxBins = (e.touches[0].clientX - pan.x)/rect.width * span;
+    S.viewLo = pan.lo - dxBins; S.viewHi = S.viewLo + span;
+    if (Math.abs(e.touches[0].clientX - pan.x) > 6) pan.moved = true;
+    clampView(); drawRuler(); blit();
+  }
+}, {passive:true});
+
+let lastTap = 0;
+wfCanvas.addEventListener("touchend", e=>{
+  clearTimeout(longPressTimer);
+  const wasCursor = cursorVisible;
+  hideCursor();
+  // A quick stationary tap that was not a long-press cursor: check for a second
+  // one and reset to full span. Done here rather than on "click" because a
+  // synthetic click does not reliably follow a canvas touch on iOS.
+  if (pan && !pan.moved && !wasCursor && Date.now() - pan.t < 250){
+    const now = Date.now();
+    if (now - lastTap < 320){
+      resetSpan();
+      lastTap = 0;
+    } else {
+      lastTap = now;
+    }
+  }
+  pinch = null; pan = null;
+}, {passive:true});
+
+/* Transient markers only. At rest the spectrum is bare -- these appear while a
+   finger is down, or for a moment after tapping a decode, then vanish. */
+let cursorVisible=false;
+function showCursor(clientX){
+  const rect = wfCanvas.getBoundingClientRect();
+  const frac = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
+  const hz = S.fLo + (S.viewLo + frac*(S.viewHi-S.viewLo))*S.hzPerBin;
+  placeCursor(hz, true);
+  cursorVisible = true;
+}
+function hideCursor(){
+  cursorVisible=false;
+  cursor.classList.remove("on"); cursorLab.classList.remove("on");
+}
+function placeCursor(hz, sticky){
+  const bin = (hz - S.fLo)/S.hzPerBin;
+  if (bin < S.viewLo || bin > S.viewHi){ return false; }
+  const frac = (bin - S.viewLo)/(S.viewHi - S.viewLo);
+  const x = frac * wfCanvas.clientWidth;
+  cursor.style.left = x+"px";
+  cursorLab.style.left = Math.max(2, Math.min(wfCanvas.clientWidth-46, x+3))+"px";
+  cursorLab.textContent = Math.round(hz)+" Hz";
+  cursor.classList.add("on"); cursorLab.classList.add("on");
+  return true;
+}
+/* Tapping a decode zooms the waterfall to that signal.
+
+   Animated rather than jumped: at full span a 50 Hz signal is a ~6pt hairline,
+   and snapping straight to an 800 Hz window gives you no way to tell where the
+   view landed. Easing across it keeps the bearing. */
+const ZOOM_SPAN_HZ = 800;
+
+function animateView(loTarget, hiTarget, ms){
+  ms = ms || 260;
+  const lo0 = S.viewLo, hi0 = S.viewHi, t0 = performance.now();
+  cancelAnimationFrame(animateView._raf);
+  function step(){
+    const k = Math.min(1, (performance.now() - t0) / ms);
+    const e = 1 - Math.pow(1 - k, 3);            // ease-out cubic
+    S.viewLo = lo0 + (loTarget - lo0) * e;
+    S.viewHi = hi0 + (hiTarget - hi0) * e;
+    clampView(); drawRuler(); blit();
+    if (S.pinnedHz !== null) placeCursor(S.pinnedHz);
+    if (k < 1) animateView._raf = requestAnimationFrame(step);
+  }
+  animateView._raf = requestAnimationFrame(step);
+}
+
+function zoomToFreq(hz){
+  const half = (ZOOM_SPAN_HZ / 2) / S.hzPerBin;
+  const c = (hz - S.fLo) / S.hzPerBin;
+  S.pinnedHz = hz;
+  animateView(c - half, c + half);
+  clearTimeout(flashFreq._t);
+  flashFreq._t = setTimeout(()=>{
+    S.pinnedHz = null;
+    cursor.classList.remove("on"); cursorLab.classList.remove("on");
+  }, 4000);
+}
+
+function flashFreq(hz){
+  // Opening the sheet first, then zooming, so the zoom is not animating inside
+  // a box that is still growing.
+  if (detent === 0){ setDetent(1); setTimeout(()=>zoomToFreq(hz), 240); }
+  else zoomToFreq(hz);
+}
+
+function resetSpan(){
+  S.pinnedHz = null;
+  cursor.classList.remove("on"); cursorLab.classList.remove("on");
+  animateView(0, S.bins);
+}
+
+/* ================= decode list ================= */
+function statusOf(d){ return (d.roster && d.roster.status) || "unknown"; }
+function passes(d){
+  if (S.filter==="cq")   return !!d.cq;
+  if (S.filter==="need") { const s=statusOf(d); return s==="needed"||s==="watchlist"; }
+  return true;
+}
+function snrClass(s){ return s>=-5?"s-strong":(s>=-15?"s-mid":"s-weak"); }
+
+function render(){
+  const shown = S.decodes.filter(passes).slice(-160).reverse();
+  $("#count").textContent = shown.length + (S.filter==="all" ? "" : "/"+S.decodes.length);
+  if (!shown.length){
+    listEl.innerHTML = `<div id="empty">${S.decodes.length
+      ? "no decodes match this filter"
+      : "waiting for decodes…"}</div>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const d of shown){
+    const el = document.createElement("div");
+    el.className = "d " + statusOf(d) + (S.sel===d ? " sel" : "");
+    const ent = (d.roster && d.roster.entity) || "";
+    const flag = (d.roster && d.roster.flag) || "";
+    el.innerHTML =
+      `<div class="bar"></div>` +
+      (d.cq ? `<span class="cqtag">CQ</span>` : ``) +
+      `<span class="call">${d.dx_call||"?"}</span>` +
+      `<span class="ent">${flag} ${ent}${d.grid?" · "+d.grid:""}</span>` +
+      `<span class="snr ${snrClass(d.snr)}">${d.snr>0?"+":""}${d.snr}</span>` +
+      `<span class="hz">${d.freq}</span>`;
+    el.addEventListener("click", ()=>{
+      const wasSelected = (S.sel === d);
+      S.sel = wasSelected ? null : d;
+      render();
+      if (wasSelected) resetSpan(); else flashFreq(d.freq);
+    });
+    frag.appendChild(el);
+  }
+  listEl.innerHTML = ""; listEl.appendChild(frag);
+}
+
+document.querySelectorAll(".chip").forEach(c=>{
+  c.addEventListener("click", ()=>{
+    document.querySelectorAll(".chip").forEach(x=>x.classList.remove("on"));
+    c.classList.add("on"); S.filter = c.dataset.f; render();
+  });
+});
+
+/* ================= cycle clock ================= */
+setInterval(()=>{
+  const s = (Date.now()/1000) % 15;
+  $("#cyclefill").style.width = (s/15*100).toFixed(1)+"%";
+  $("#cyclenum").textContent = String(Math.floor(s)).padStart(2,"0")+"s";
+  const stale = S.lastRowAt && (performance.now()-S.lastRowAt > 4000);
+  $("#rxdot").classList.toggle("stale", !!stale);
+}, 200);
+
+/* ================= meters, TX state ================= */
+/* Served two ways: as / straight off port 8010, and as /ft8/ through a
+   reverse proxy that strips the prefix before it reaches us. An absolute
+   /api path is right in the first case and lands on the PANEL in the second,
+   so every request is built from the prefix this page was actually loaded
+   under. */
+const BASE = location.pathname.replace(/\/+$/, "");
+const api = path => BASE + path;
+
+function post(path, body){
+  return fetch(api(path), {method:"POST", headers:{"Content-Type":"application/json"},
+                      body: JSON.stringify(body||{})})
+    .then(r => r.json().then(j => ({ok:r.ok, j})));
+}
+
+function setMeter(id, val, unit, warn, hot){
+  const el = $(id); if (!el) return;
+  const b = el.querySelector("b");
+  if (val === null || val === undefined){ b.textContent = "--"; el.className = "m"; return; }
+  b.textContent = (unit === "swr") ? Number(val).toFixed(1) : Math.round(val);
+  el.className = "m" + (hot !== undefined && val >= hot ? " hot"
+                      : warn !== undefined && val >= warn ? " warn" : "");
+}
+
+function renderTx(tx){
+  if (!tx) return;
+  if (tx.guard){
+    $("#arm").classList.toggle("on", !!tx.guard.armed);
+    $("#arm").textContent = tx.guard.armed
+      ? `ARMED ${tx.guard.cycles}/${tx.guard.cycle_cap}` : "ARM TX";
+    // SWR is the one hard guard, so it gets the thresholds the guard uses.
+    const t = tx.guard.thresholds || {};
+    setMeter("#m-swr", tx.guard.swr, "swr", t.swr_soft, t.swr_trip);
+    setMeter("#m-alc", tx.guard.alc);
+    setMeter("#m-po",  tx.guard.watts);
+    setMeter("#m-rfg", tx.guard.rf_gain);
+  }
+  if (tx.slot){
+    S.txDf = tx.slot.target_slot;
+    const bar = $("#xitbar");
+    bar.classList.toggle("on", !!tx.slot.active);
+    if (tx.slot.active) $("#xitval").textContent =
+      (tx.slot.offset_hz > 0 ? "+" : "") + tx.slot.offset_hz +
+      (tx.slot.verified ? "" : "  UNVERIFIED");
+    $("#slotval").textContent = tx.slot.target_slot
+      ? tx.slot.target_slot + " Hz" : "JTDX";
+  }
+  if (tx.jtdx){
+    const j = tx.jtdx;
+    $("#jtdxstate").textContent = j.connected
+      ? `JTDX ${j.tx_enabled ? "TX-ENABLED" : "rx"}${j.hound ? " · HOUND" : ""}`
+        + (j.tx_df != null ? ` · df ${j.tx_df}` : "")
+      : "JTDX not linked";
+  }
+}
+
+function showTrip(t){
+  const el = $("#trip");
+  el.className = "on " + (t.urgent ? "urgent" : "soft");
+  el.textContent = (t.urgent ? "TX ABORTED — " : "TX STOPPED — ") + t.detail;
+  clearTimeout(showTrip._t);
+  showTrip._t = setTimeout(()=>el.classList.remove("on"), 20000);
+}
+
+$("#halt").addEventListener("click", ()=>{
+  post("/api/tx/halt").then(()=>refreshTx());
+});
+$("#arm").addEventListener("click", ()=>{
+  if ($("#arm").classList.contains("on")){
+    post("/api/tx/halt").then(()=>refreshTx());
+  } else {
+    post("/api/tx/arm", {}).then(r=>{
+      if (!r.ok) showTrip({urgent:true, detail:(r.j && r.j.error) || "arm refused"});
+      refreshTx();
+    });
+  }
+});
+$("#xitclr").addEventListener("click", ()=>{
+  post("/api/tx/slot/clear").then(()=>refreshTx());
+});
+
+function refreshTx(){
+  fetch(api("/api/tx/status")).then(r=>r.json()).then(renderTx).catch(()=>{});
+}
+setInterval(refreshTx, 2000);
+
+/* ================= websocket ================= */
+let ws=null, retry=0;
+function connect(){
+  ws = new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+BASE+"/ws");
+  ws.binaryType = "arraybuffer";
+
+  // Every message is the guard's dead-man heartbeat (DEADMAN_S is 45 s server
+  // side), so this interval is a safety parameter, not a keepalive nicety.
+  ws.onopen = ()=>{ retry=0; setInterval(()=>{ try{ws.send("k");}catch(e){} }, 10000); };
+
+  ws.onmessage = ev=>{
+    if (typeof ev.data === "string"){
+      const m = JSON.parse(ev.data);
+      if (m.type==="hello"){
+        if (m.waterfall && m.waterfall.bins){
+          S.hzPerBin = m.waterfall.hz_per_bin; S.fLo = m.waterfall.f_lo; S.fHi = m.waterfall.f_hi;
+          if (m.waterfall.running){ initRing(m.waterfall.bins); sizeCanvases(); }
+          else wfmsg.textContent = "no audio: " + (m.waterfall.error||"waterfall not running");
+        }
+        if (m.dial_mhz) $("#dial").textContent = m.dial_mhz.toFixed(3);
+        if (m.mode) $("#mode").textContent = m.mode;
+        S.decodes = m.decodes || []; render();
+        if (m.tx) renderTx(m.tx);
+      } else if (m.type==="trip"){
+        showTrip(m.trip); refreshTx();
+      } else if (m.type==="jtdx"){
+        renderTx({jtdx: m.status});
+      } else if (m.type==="decode"){
+        S.decodes.push(m.decode);
+        if (S.decodes.length > 600) S.decodes.splice(0, S.decodes.length-600);
+        if (m.decode.dial_mhz) $("#dial").textContent = m.decode.dial_mhz.toFixed(3);
+        render();
+      }
+    } else {
+      const dv = new DataView(ev.data);
+      const bins = dv.getUint16(4, true);
+      const floor = dv.getInt16(6, true)/10;
+      $("#floor").textContent = floor.toFixed(0)+" dB";
+      if (!S.ring) { initRing(bins); sizeCanvases(); }
+      pushRow(new Uint8Array(ev.data, 8, bins));
+    }
+  };
+
+  ws.onclose = ()=>{ retry=Math.min(retry+1,6); setTimeout(connect, 500*retry); };
+  ws.onerror = ()=>{ try{ws.close();}catch(e){} };
+}
+
+setDetent(1, false);
+sizeCanvases();
+connect();
+refreshTx();
+</script>
+</body>
+</html>

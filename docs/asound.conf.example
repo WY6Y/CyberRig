@@ -1,0 +1,35 @@
+# Example /etc/asound.conf for Linux: share the FTDX10's USB codec capture
+# between JTDX/WSJT-X and CyberRig's FT8 waterfall.
+#
+# The codec exposes a single capture subdevice, so without dsnoop whoever opens
+# it first locks everyone else out. Point JTDX's audio input at "ftdx10_rx" and
+# CyberRig's FT8 page (FT8_AUDIO_DEVICE, default "ftdx10_rx") will read the same
+# stream. Check the card name with `arecord -l`; the FTDX10 shows up as "CODEC".
+#
+# Deliberately defines no pcm.!default — a global default is how an unrelated
+# app gets dragged onto the wrong card.
+
+pcm.ftdx10_snoop {
+    type dsnoop
+    ipc_key 29431
+    ipc_perm 0666
+    slave {
+        pcm "hw:CARD=CODEC,DEV=0"
+        channels 1
+        rate 48000
+        format S16_LE
+        period_size 960
+        buffer_size 4800
+    }
+}
+
+# plug wrapper: lets clients ask for other rates/formats (the FT8 waterfall
+# wants 12 kHz) without renegotiating the shared hardware stream.
+pcm.ftdx10_rx {
+    type plug
+    slave.pcm "ftdx10_snoop"
+    hint {
+        show on
+        description "FTDX10 shared RX (dsnoop)"
+    }
+}
